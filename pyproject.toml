@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wechat-agent"
+version = "0.1.0"
+description = "Local Windows WeChat database discovery, copy, decrypt, and verification CLI."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "TwelveAI" }]
+dependencies = []
+
+[project.scripts]
+wechat-agent = "wechat_agent_cli.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
