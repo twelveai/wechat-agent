@@ -20,8 +20,9 @@ The CLI writes runtime artifacts under `.wechat-agent/`, which is ignored by Git
 - `scan`: detects running WeChat processes and candidate database files.
 - `key`: saves a manual key or extracts one from an external command that prints a 64-character hex key.
 - `copy`: hot-copies `.db`, `-wal`, and `-shm` files into a timestamped workspace.
-- `decrypt`: copies plain SQLite databases as-is, or decrypts encrypted databases with the `sqlcipher` executable when available.
+- `decrypt`: copies plain SQLite databases as-is, or decrypts encrypted databases with the built-in native decryptor.
 - `verify`: opens SQLite files and reports tables, columns, and likely WeChat schema type.
+- `serve`: starts the local read-only Dashboard REST API.
 
 ## External Key Extraction
 
@@ -93,3 +94,24 @@ If your database family needs a different decryptor, use `--provider-cmd` and co
 - `WECHAT_AGENT_INPUT`
 - `WECHAT_AGENT_OUTPUT`
 - `WECHAT_AGENT_DB_KEY`
+
+## Dashboard API
+
+After decrypting, start the local API:
+
+```powershell
+wechat-agent serve --decrypted-dir .wechat-agent\work\20260510-000628\decrypted
+```
+
+The server binds to `127.0.0.1:8765` by default and reads decrypted SQLite files in read-only mode.
+
+Available endpoints:
+
+- `GET /api/health`: database availability and paths.
+- `GET /api/overview`: chat, message, contact, and session counts.
+- `GET /api/contacts?q=&limit=&offset=`: contact list with display names.
+- `GET /api/sessions?limit=&offset=`: recent sessions joined with contacts.
+- `GET /api/chats?q=&limit=&offset=`: message chat tables mapped from `Name2Id.user_name`.
+- `GET /api/messages?chat=&q=&type=&before=&after=&limit=&include_content=`: message query across one chat or all chats.
+
+For Weixin 4.1 message databases, chat message tables are mapped as `Msg_` + `md5(username)`, using the decrypted `Name2Id` table.

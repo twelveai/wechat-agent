@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from wechat_agent_cli.copying import copy_databases
+from wechat_agent_cli.dashboard import DashboardStore
 from wechat_agent_cli.decrypt import decrypt_databases
 from wechat_agent_cli.key_extract import (
     HMAC_SHA512_SIZE,
@@ -256,6 +257,87 @@ class CopyDecryptVerifyTests(unittest.TestCase):
             verify_result = verify_databases(root / "decrypted")
             self.assertTrue(verify_result["ok"])
             self.assertEqual(verify_result["databases"][0]["schema_family"], "wechat_4_message")
+
+
+class DashboardStoreTests(unittest.TestCase):
+    def test_dashboard_store_maps_contacts_sessions_and_messages(self) -> None:
+        with temp_dir() as root:
+            decrypted = root / "decrypted"
+            decrypted.mkdir()
+            username = "wxid_user123"
+            table = "Msg_" + hashlib.md5(username.encode("utf-8")).hexdigest()
+
+            message_db = decrypted / "message_0-test.db"
+            con = sqlite3.connect(str(message_db))
+            try:
+                con.execute("CREATE TABLE Name2Id (user_name TEXT, is_session INTEGER)")
+                con.execute("INSERT INTO Name2Id VALUES (?, 1)", (username,))
+                con.execute(
+                    f'CREATE TABLE "{table}" ('
+                    "local_id INTEGER, server_id INTEGER, local_type INTEGER, sort_seq INTEGER, "
+                    "real_sender_id INTEGER, create_time INTEGER, status INTEGER, upload_status INTEGER, "
+                    "download_status INTEGER, server_seq INTEGER, origin_source INTEGER, source BLOB, "
+                    "message_content TEXT, compress_content TEXT, packed_info_data BLOB, "
+                    "WCDB_CT_message_content BLOB, WCDB_CT_source BLOB)"
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "upload_status, download_status, server_seq, origin_source, source, message_content, "
+                    "compress_content, packed_info_data, WCDB_CT_message_content, WCDB_CT_source) "
+                    "VALUES (1, 99, 1, 10, 2, 1700000000, 0, 0, 0, 0, 0, x'', 'hello dashboard', '', x'', x'', x'')"
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            contact_db = decrypted / "contact-test.db"
+            con = sqlite3.connect(str(contact_db))
+            try:
+                con.execute(
+                    "CREATE TABLE contact (id INTEGER, username TEXT, alias TEXT, remark TEXT, nick_name TEXT, "
+                    "local_type INTEGER, verify_flag INTEGER, is_in_chat_room INTEGER, chat_room_type INTEGER, "
+                    "delete_flag INTEGER)"
+                )
+                con.execute(
+                    "INSERT INTO contact VALUES (1, ?, '', 'Remark Name', 'Nick Name', 0, 0, 0, 0, 0)",
+                    (username,),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            session_db = decrypted / "session-test.db"
+            con = sqlite3.connect(str(session_db))
+            try:
+                con.execute(
+                    "CREATE TABLE SessionTable (username TEXT, type INTEGER, unread_count INTEGER, summary TEXT, "
+                    "last_timestamp INTEGER, sort_timestamp INTEGER, last_msg_type INTEGER, last_msg_sender TEXT, "
+                    "last_sender_display_name TEXT)"
+                )
+                con.execute(
+                    "INSERT INTO SessionTable VALUES (?, 1, 0, 'summary', 1700000000, 1700000001, 1, ?, 'sender')",
+                    (username, username),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            store = DashboardStore(decrypted)
+
+            contacts = store.contacts()
+            self.assertEqual(contacts["items"][0]["display_name"], "Remark Name")
+
+            sessions = store.sessions()
+            self.assertEqual(sessions["items"][0]["display_name"], "Remark Name")
+
+            chats = store.chats()
+            self.assertEqual(chats["items"][0]["table"], table)
+            self.assertEqual(chats["items"][0]["message_count"], 1)
+
+            messages = store.messages(chat=username, q="dashboard")
+            self.assertEqual(messages["items"][0]["message_content"], "hello dashboard")
+            self.assertEqual(messages["items"][0]["chat_display_name"], "Remark Name")
 
 
 if __name__ == "__main__":

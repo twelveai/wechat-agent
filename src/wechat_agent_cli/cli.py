@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from .copying import copy_databases
+from .dashboard import run_dashboard_server
 from .decrypt import decrypt_databases
 from .key_extract import extract_wechat_key
 from .keys import (
@@ -148,6 +149,16 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--input", required=True, type=Path, help="SQLite database file or directory.")
     verify.add_argument("--json", action="store_true", help="Emit JSON output.")
     verify.set_defaults(func=cmd_verify)
+
+    serve = subparsers.add_parser("serve", help="Start the local Dashboard REST API.")
+    serve.add_argument(
+        "--decrypted-dir",
+        type=Path,
+        help="Directory containing decrypted SQLite databases. Defaults to the latest work/*/decrypted directory.",
+    )
+    serve.add_argument("--host", default="127.0.0.1", help="Host to bind. Defaults to 127.0.0.1.")
+    serve.add_argument("--port", type=int, default=8765, help="Port to bind. Defaults to 8765.")
+    serve.set_defaults(func=cmd_serve)
 
     return parser
 
@@ -307,6 +318,24 @@ def cmd_verify(args: argparse.Namespace) -> int:
             else:
                 print(f"    error: {item['error']}")
     return 0 if all(item["ok"] for item in result["databases"]) else 1
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    decrypted_dir = args.decrypted_dir or latest_decrypted_dir(args.workspace)
+    run_dashboard_server(decrypted_dir=decrypted_dir, host=args.host, port=args.port)
+    return 0
+
+
+def latest_decrypted_dir(workspace: Path) -> Path:
+    work_dir = workspace / "work"
+    candidates = [
+        path / "decrypted"
+        for path in work_dir.iterdir()
+        if (path / "decrypted").is_dir()
+    ] if work_dir.exists() else []
+    if not candidates:
+        raise ValueError("No decrypted directory found. Run decrypt first or pass --decrypted-dir.")
+    return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
 if __name__ == "__main__":
