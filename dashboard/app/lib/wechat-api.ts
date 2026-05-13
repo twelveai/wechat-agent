@@ -180,11 +180,7 @@ export async function getWechat<T>(path: string, params?: Record<string, string 
       Accept: "application/json",
     },
   });
-  const payload = (await response.json()) as ApiResult<T>;
-  if (!response.ok || payload.ok === false) {
-    throw new Error(payload.error ?? `Request failed: ${response.status}`);
-  }
-  return payload;
+  return parseWechatResponse<T>(response);
 }
 
 export async function postWechat<T>(path: string, body: Record<string, unknown>) {
@@ -197,9 +193,35 @@ export async function postWechat<T>(path: string, body: Record<string, unknown>)
     },
     body: JSON.stringify(body),
   });
-  const payload = (await response.json()) as ApiResult<T>;
+  return parseWechatResponse<T>(response);
+}
+
+async function parseWechatResponse<T>(response: Response) {
+  const text = await response.text();
+  let payload: ApiResult<T> | null = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text) as ApiResult<T>;
+    } catch {
+      payload = null;
+    }
+  }
+  if (!payload) {
+    throw new Error(formatNonJsonError(response, text));
+  }
   if (!response.ok || payload.ok === false) {
     throw new Error(payload.error ?? `Request failed: ${response.status}`);
   }
   return payload;
+}
+
+function formatNonJsonError(response: Response, text: string) {
+  const detail = text
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const suffix = detail ? `: ${detail.slice(0, 240)}` : "";
+  return `Request failed: ${response.status} ${response.statusText}${suffix}`;
 }

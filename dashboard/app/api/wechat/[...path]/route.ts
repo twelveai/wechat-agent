@@ -38,6 +38,15 @@ async function proxyWechat(
       },
       method,
     });
+    if (method === "POST" && response.status === 501) {
+      return Response.json(
+        {
+          ok: false,
+          error: "Local Dashboard API does not support POST yet. Restart `wechat-agent serve` so it loads the latest /api/summary code.",
+        },
+        { status: 502 },
+      );
+    }
     const body = await response.arrayBuffer();
     return new Response(body, {
       status: response.status,

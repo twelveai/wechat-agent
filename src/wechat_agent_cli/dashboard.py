@@ -195,6 +195,7 @@ class OpenAIResponsesConfig:
     api_key: str
     model: str = DEFAULT_OPENAI_RESPONSES_MODEL
     timeout_seconds: int = 90
+    stream: bool = False
 
 
 @dataclass(frozen=True)
@@ -2066,6 +2067,7 @@ def load_openai_responses_config() -> OpenAIResponsesConfig:
         api_key = str(payload.get("api_key") or payload.get("apikey") or "").strip()
         model = str(payload.get("model") or DEFAULT_OPENAI_RESPONSES_MODEL).strip()
         timeout = payload.get("timeout_seconds", 90)
+        stream = bool(payload.get("stream", False))
         if not url:
             raise ValueError(f"OpenAI config missing url: {path}")
         if not api_key or api_key.lower().startswith(("replace", "sk-xxxx", "your_")):
@@ -2079,6 +2081,7 @@ def load_openai_responses_config() -> OpenAIResponsesConfig:
             api_key=api_key,
             model=model or DEFAULT_OPENAI_RESPONSES_MODEL,
             timeout_seconds=max(10, timeout_seconds),
+            stream=stream,
         )
     searched = ", ".join(str(path) for path in openai_config_paths())
     raise ValueError(f"OpenAI config not found. Create .wechat-agent/openai-responses.json. Searched: {searched}")
@@ -2167,19 +2170,30 @@ def truncate_text(value: str, limit: int) -> str:
 
 
 def call_openai_responses(config: OpenAIResponsesConfig, instructions: str, input_text: str) -> dict:
+    prompt_text = (
+        f"{instructions}\n\n"
+        "请严格输出一个 JSON 对象，字段必须符合以下 JSON Schema。不要输出 Markdown 代码块，不要输出额外解释。\n"
+        f"{json.dumps(SUMMARY_SCHEMA, ensure_ascii=False)}\n\n"
+        "待总结的微信消息 JSON：\n"
+        f"{input_text}"
+    )
     request_payload = {
         "model": config.model,
-        "instructions": instructions,
-        "input": input_text,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "wechat_message_summary",
-                "schema": SUMMARY_SCHEMA,
-                "strict": True,
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": prompt_text,
+                    }
+                ],
             }
-        },
+        ],
     }
+    if config.stream:
+        request_payload["stream"] = True
     request = Request(
         config.url,
         data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
@@ -2198,6 +2212,8 @@ def call_openai_responses(config: OpenAIResponsesConfig, instructions: str, inpu
         raise ValueError(f"OpenAI Responses API error {exc.code}: {truncate_text(detail, 800)}") from exc
     except URLError as exc:
         raise ValueError(f"OpenAI Responses API is not reachable: {exc.reason}") from exc
+    if config.stream:
+        return parse_openai_sse_response(raw, config.model)
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -2232,7 +2248,45 @@ def extract_openai_output_text(payload: dict) -> str:
     raise ValueError("OpenAI Responses API returned no output text")
 
 
+def parse_openai_sse_response(raw: str, model: str) -> dict:
+    texts: list[str] = []
+    response_id: str | None = None
+    response_model: str | None = None
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if isinstance(event.get("response"), dict):
+            response = event["response"]
+            response_id = response_id or response.get("id")
+            response_model = response_model or response.get("model")
+        if isinstance(event.get("delta"), str):
+            texts.append(event["delta"])
+        if isinstance(event.get("text"), str):
+            texts.append(event["text"])
+        output_text = event.get("output_text")
+        if isinstance(output_text, str):
+            texts.append(output_text)
+    if not texts:
+        raise ValueError("OpenAI Responses API stream returned no output text")
+    return {
+        "id": response_id,
+        "model": response_model or model,
+        "output_text": "".join(texts),
+    }
+
+
 def parse_summary_output(output_text: str, message_count: int, after: int | None, before: int | None) -> dict:
+    output_text = extract_json_text(output_text)
     try:
         payload = json.loads(output_text)
     except json.JSONDecodeError:
@@ -2267,6 +2321,18 @@ def parse_summary_output(output_text: str, message_count: int, after: int | None
         }
     )
     return summary
+
+
+def extract_json_text(output_text: str) -> str:
+    text = output_text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start : end + 1]
+    return text
 
 
 def normalize_object_list(value: Any, keys: list[str]) -> list[dict[str, str]]:

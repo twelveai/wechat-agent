@@ -1,6 +1,7 @@
 {
   "url": "https://api.openai.com/v1/responses",
   "api_key": "replace-with-your-openai-api-key",
-  "model": "gpt-4o-mini",
-  "timeout_seconds": 90
+  "model": "gpt-5.5",
+  "timeout_seconds": 90,
+  "stream": false
 }

@@ -120,7 +120,9 @@ Message summaries read OpenAI settings from `.wechat-agent/openai-responses.json
 ```json
 {
   "url": "https://api.openai.com/v1/responses",
-  "api_key": "replace-with-your-openai-api-key"
+  "api_key": "replace-with-your-openai-api-key",
+  "model": "gpt-5.5",
+  "stream": false
 }
 ```
 
