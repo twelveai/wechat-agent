@@ -9,7 +9,7 @@ from typing import Iterable
 from .scanner import DatabaseCandidate, candidate_from_path, normalize_account_part, scan_environment
 from .workspace import timestamp_run_id, write_json
 
-CORE_CATEGORIES = {"login", "message", "contact", "session"}
+CORE_CATEGORIES = {"login", "message", "contact", "session", "message_resource", "hardlink"}
 
 
 def copy_databases(

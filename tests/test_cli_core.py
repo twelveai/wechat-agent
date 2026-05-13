@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import hashlib
 import hmac
+import importlib
+import datetime
 import os
 import shutil
 import sqlite3
+import struct
 import sys
 import unittest
 import uuid
@@ -17,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from wechat_agent_cli.copying import copy_databases
-from wechat_agent_cli.dashboard import DashboardStore
+from wechat_agent_cli.dashboard import DashboardStore, decode_message_content, decode_wechat_v4_image
 from wechat_agent_cli.decrypt import decrypt_databases
 from wechat_agent_cli.key_extract import (
     HMAC_SHA512_SIZE,
@@ -38,6 +41,10 @@ from wechat_agent_cli.workspace import ensure_gitignore_entry
 
 
 TEST_KEY = "a" * 64
+try:
+    stdlib_zstd = importlib.import_module("compression.zstd")
+except ModuleNotFoundError:
+    stdlib_zstd = None
 
 
 @contextmanager
@@ -260,11 +267,111 @@ class CopyDecryptVerifyTests(unittest.TestCase):
 
 
 class DashboardStoreTests(unittest.TestCase):
-    def test_dashboard_store_maps_contacts_sessions_and_messages(self) -> None:
+    def test_decode_message_content_decompresses_zstd_blob(self) -> None:
+        if stdlib_zstd is None:
+            self.skipTest("stdlib compression.zstd is not available")
+        expected = "compressed dashboard message"
+        blob = stdlib_zstd.compress(expected.encode("utf-8"))
+
+        self.assertEqual(decode_message_content(blob), expected)
+
+    def test_single_chat_sender_uses_name2id_rowid_not_contact_id(self) -> None:
         with temp_dir() as root:
             decrypted = root / "decrypted"
             decrypted.mkdir()
-            username = "wxid_user123"
+            self_username = "wxid_self"
+            peer_username = "wxid_peer"
+            table = "Msg_" + hashlib.md5(peer_username.encode("utf-8")).hexdigest()
+
+            message_db = decrypted / "message_0-test.db"
+            con = sqlite3.connect(str(message_db))
+            try:
+                con.execute("CREATE TABLE Name2Id (user_name TEXT, is_session INTEGER)")
+                con.execute("INSERT INTO Name2Id (rowid, user_name, is_session) VALUES (2, ?, 0)", (self_username,))
+                con.execute("INSERT INTO Name2Id (rowid, user_name, is_session) VALUES (1973, ?, 1)", (peer_username,))
+                con.execute(
+                    f'CREATE TABLE "{table}" ('
+                    "local_id INTEGER, server_id INTEGER, local_type INTEGER, sort_seq INTEGER, "
+                    "real_sender_id INTEGER, create_time INTEGER, status INTEGER, upload_status INTEGER, "
+                    "download_status INTEGER, server_seq INTEGER, origin_source INTEGER, source BLOB, "
+                    "message_content TEXT, compress_content TEXT, packed_info_data BLOB, "
+                    "WCDB_CT_message_content BLOB, WCDB_CT_source BLOB)"
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "upload_status, download_status, server_seq, origin_source, source, message_content, "
+                    "compress_content, packed_info_data, WCDB_CT_message_content, WCDB_CT_source) "
+                    "VALUES (1, 1, 1, 1, 2, 1700000000, 3, 0, 0, 0, 0, x'', 'from self', '', x'', x'', x'')"
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "upload_status, download_status, server_seq, origin_source, source, message_content, "
+                    "compress_content, packed_info_data, WCDB_CT_message_content, WCDB_CT_source) "
+                    "VALUES (2, 2, 1, 2, 1973, 1700000001, 3, 0, 0, 0, 0, x'', 'from peer', '', x'', x'', x'')"
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            contact_db = decrypted / "contact-test.db"
+            con = sqlite3.connect(str(contact_db))
+            try:
+                con.execute(
+                    "CREATE TABLE contact (id INTEGER, username TEXT, alias TEXT, remark TEXT, nick_name TEXT, "
+                    "local_type INTEGER, verify_flag INTEGER, is_in_chat_room INTEGER, chat_room_type INTEGER, "
+                    "delete_flag INTEGER)"
+                )
+                con.execute("INSERT INTO contact VALUES (2, 'wrong_self', '', 'Wrong Self', '', 0, 0, 0, 0, 0)")
+                con.execute("INSERT INTO contact VALUES (1973, 'wrong_peer', '', 'Wrong Peer', '', 0, 0, 0, 0, 0)")
+                con.execute(
+                    "INSERT INTO contact VALUES (10, ?, '', 'Me Display', '', 0, 0, 0, 0, 0)",
+                    (self_username,),
+                )
+                con.execute(
+                    "INSERT INTO contact VALUES (11, ?, '', 'Peer Display', '', 0, 0, 0, 0, 0)",
+                    (peer_username,),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            session_db = decrypted / "session-test.db"
+            con = sqlite3.connect(str(session_db))
+            try:
+                con.execute(
+                    "CREATE TABLE SessionTable (username TEXT, type INTEGER, unread_count INTEGER, summary TEXT, "
+                    "last_timestamp INTEGER, sort_timestamp INTEGER, last_msg_type INTEGER, last_msg_sender TEXT, "
+                    "last_sender_display_name TEXT)"
+                )
+                con.execute(
+                    "INSERT INTO SessionTable VALUES (?, 1, 0, 'summary', 1700000001, 1700000001, 1, ?, 'sender')",
+                    (peer_username, peer_username),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            store = DashboardStore(decrypted)
+            messages = {item["local_id"]: item for item in store.messages(chat=peer_username)["items"]}
+
+            self.assertEqual(messages[1]["sender_username"], self_username)
+            self.assertEqual(messages[1]["sender_display_name"], "Me Display")
+            self.assertTrue(messages[1]["is_self"])
+            self.assertEqual(messages[2]["sender_username"], peer_username)
+            self.assertEqual(messages[2]["sender_display_name"], "Peer Display")
+            self.assertFalse(messages[2]["is_self"])
+
+    def test_dashboard_store_maps_contacts_sessions_and_messages(self) -> None:
+        if stdlib_zstd is None:
+            self.skipTest("stdlib compression.zstd is not available")
+        with temp_dir() as root:
+            decrypted = root / "decrypted"
+            decrypted.mkdir()
+            username = "group_room@chatroom"
+            sender_username = "wxid_sender"
+            wrong_sender_username = "wxid_wrong"
             table = "Msg_" + hashlib.md5(username.encode("utf-8")).hexdigest()
 
             message_db = decrypted / "message_0-test.db"
@@ -285,7 +392,47 @@ class DashboardStoreTests(unittest.TestCase):
                     "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
                     "upload_status, download_status, server_seq, origin_source, source, message_content, "
                     "compress_content, packed_info_data, WCDB_CT_message_content, WCDB_CT_source) "
-                    "VALUES (1, 99, 1, 10, 2, 1700000000, 0, 0, 0, 0, 0, x'', 'hello dashboard', '', x'', x'', x'')"
+                    "VALUES (1, 99, 1, 10, 3, 1700000000, 0, 0, 0, 0, 0, x'', ?, '', x'', x'', x'')",
+                    (f"{sender_username}:\nhello dashboard",),
+                )
+                compressed = stdlib_zstd.compress(
+                    f"{sender_username}:\ncompressed dashboard message".encode("utf-8")
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "upload_status, download_status, server_seq, origin_source, source, message_content, "
+                    "compress_content, packed_info_data, WCDB_CT_message_content, WCDB_CT_source) "
+                    "VALUES (2, 100, 1, 11, 3, 1700000001, 0, 0, 0, 0, 0, x'', ?, '', x'', x'', x'')",
+                    (sqlite3.Binary(compressed),),
+                )
+                xml_content = (
+                    f"{wrong_sender_username}:\n"
+                    f"<msg><appmsg><title>xml special dashboard</title><type>57</type></appmsg>"
+                    f"<fromusername>{sender_username}</fromusername></msg>"
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "upload_status, download_status, server_seq, origin_source, source, message_content, "
+                    "compress_content, packed_info_data, WCDB_CT_message_content, WCDB_CT_source) "
+                    "VALUES (3, 101, 244813135921, 12, 3, 1700000002, 0, 0, 0, 0, 0, x'', ?, '', x'', x'', x'')",
+                    (xml_content,),
+                )
+                pat_content = (
+                    f"<msg><appmsg><title>Pat special dashboard</title><type>62</type>"
+                    f"<patinfo><fromusername>{sender_username}</fromusername>"
+                    f"<chatusername>{username}</chatusername>"
+                    f"<pattedusername>wxid_target</pattedusername></patinfo></appmsg>"
+                    f"<fromusername></fromusername></msg>"
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "upload_status, download_status, server_seq, origin_source, source, message_content, "
+                    "compress_content, packed_info_data, WCDB_CT_message_content, WCDB_CT_source) "
+                    "VALUES (4, 102, 266287972401, 13, 3, 1700000003, 0, 0, 0, 0, 0, x'', ?, '', x'', x'', x'')",
+                    (pat_content,),
                 )
                 con.commit()
             finally:
@@ -300,8 +447,16 @@ class DashboardStoreTests(unittest.TestCase):
                     "delete_flag INTEGER)"
                 )
                 con.execute(
-                    "INSERT INTO contact VALUES (1, ?, '', 'Remark Name', 'Nick Name', 0, 0, 0, 0, 0)",
+                    "INSERT INTO contact VALUES (1, ?, '', 'Group Remark', 'Group Nick', 0, 0, 1, 0, 0)",
                     (username,),
+                )
+                con.execute(
+                    "INSERT INTO contact VALUES (2, ?, '', 'Sender Remark', 'Sender Nick', 0, 0, 0, 0, 0)",
+                    (sender_username,),
+                )
+                con.execute(
+                    "INSERT INTO contact VALUES (3, ?, '', 'DZ-qingfeng', 'Wrong Nick', 0, 0, 0, 0, 0)",
+                    (wrong_sender_username,),
                 )
                 con.commit()
             finally:
@@ -326,18 +481,324 @@ class DashboardStoreTests(unittest.TestCase):
             store = DashboardStore(decrypted)
 
             contacts = store.contacts()
-            self.assertEqual(contacts["items"][0]["display_name"], "Remark Name")
+            contact_items = {item["username"]: item for item in contacts["items"]}
+            self.assertEqual(contact_items[username]["display_name"], "Group Remark")
 
             sessions = store.sessions()
-            self.assertEqual(sessions["items"][0]["display_name"], "Remark Name")
+            self.assertEqual(sessions["items"][0]["display_name"], "Group Remark")
 
             chats = store.chats()
             self.assertEqual(chats["items"][0]["table"], table)
-            self.assertEqual(chats["items"][0]["message_count"], 1)
+            self.assertEqual(chats["items"][0]["message_count"], 4)
 
             messages = store.messages(chat=username, q="dashboard")
-            self.assertEqual(messages["items"][0]["message_content"], "hello dashboard")
-            self.assertEqual(messages["items"][0]["chat_display_name"], "Remark Name")
+            contents = [item["message_content"] for item in messages["items"]]
+            self.assertIn("hello dashboard", contents)
+            self.assertIn("compressed dashboard message", contents)
+            self.assertTrue(all(not content.startswith(f"{sender_username}:") for content in contents))
+            self.assertEqual(messages["items"][0]["chat_display_name"], "Group Remark")
+            self.assertTrue(all(item["sender_username"] == sender_username for item in messages["items"]))
+            self.assertTrue(all(item["sender_display_name"] == "Sender Remark" for item in messages["items"]))
+
+            compressed_matches = store.messages(chat=username, q="compressed")
+            self.assertEqual(compressed_matches["items"][0]["message_content"], "compressed dashboard message")
+            self.assertEqual(compressed_matches["items"][0]["sender_display_name"], "Sender Remark")
+
+            xml_matches = store.messages(chat=username, q="xml special")
+            self.assertEqual(xml_matches["items"][0]["sender_username"], sender_username)
+            self.assertEqual(xml_matches["items"][0]["sender_display_name"], "Sender Remark")
+            self.assertEqual(xml_matches["items"][0]["message_content"], "xml special dashboard")
+
+            pat_matches = store.messages(chat=username, q="Pat special")
+            self.assertEqual(pat_matches["items"][0]["sender_username"], sender_username)
+            self.assertEqual(pat_matches["items"][0]["sender_display_name"], "Sender Remark")
+            self.assertEqual(pat_matches["items"][0]["message_content"], "Pat special dashboard")
+
+    def test_dashboard_store_summarizes_text_messages_in_range(self) -> None:
+        with temp_dir() as root:
+            decrypted = root / "decrypted"
+            decrypted.mkdir()
+            peer_username = "wxid_peer"
+            table = "Msg_" + hashlib.md5(peer_username.encode("utf-8")).hexdigest()
+
+            message_db = decrypted / "message_0-test.db"
+            con = sqlite3.connect(str(message_db))
+            try:
+                con.execute("CREATE TABLE Name2Id (user_name TEXT, is_session INTEGER)")
+                con.execute("INSERT INTO Name2Id (rowid, user_name, is_session) VALUES (7, ?, 1)", (peer_username,))
+                con.execute(
+                    f'CREATE TABLE "{table}" ('
+                    "local_id INTEGER, server_id INTEGER, local_type INTEGER, sort_seq INTEGER, "
+                    "real_sender_id INTEGER, create_time INTEGER, status INTEGER, message_content TEXT, "
+                    "compress_content TEXT, packed_info_data BLOB)"
+                )
+                rows = [
+                    (1, 1, 1, 1, 7, 1700000000, 0, "first text", "", sqlite3.Binary(b"")),
+                    (2, 2, 3, 2, 7, 1700000001, 0, "image text should not summarize", "", sqlite3.Binary(b"")),
+                    (3, 3, 1, 3, 7, 1700000002, 0, "second text", "", sqlite3.Binary(b"")),
+                    (4, 4, 1, 4, 7, 1700000100, 0, "outside range", "", sqlite3.Binary(b"")),
+                ]
+                con.executemany(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "message_content, compress_content, packed_info_data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    rows,
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            fake_summary = {
+                "title": "范围内消息",
+                "executive_summary": "讨论了两条文本。",
+                "message_count": 0,
+                "time_range": "test range",
+                "sentiment": "平稳",
+                "key_points": [],
+                "decisions": [],
+                "action_items": [],
+                "risks": [],
+                "open_questions": [],
+                "notable_messages": [],
+            }
+            store = DashboardStore(decrypted)
+            with patch("wechat_agent_cli.dashboard.request_openai_message_summary") as summarize:
+                summarize.return_value = {"summary": fake_summary, "response_id": "resp_test", "model": "test-model"}
+
+                result = store.summarize_messages(chat=peer_username, after=1700000000, before=1700000002)
+
+            summarize.assert_called_once()
+            summarized_messages = summarize.call_args.kwargs["messages"]
+            self.assertEqual([item["message_content"] for item in summarized_messages], ["first text", "second text"])
+            self.assertEqual(result["messages"]["included"], 2)
+            self.assertEqual(result["summary"]["message_count"], 2)
+            self.assertEqual(result["openai"]["response_id"], "resp_test")
+
+    def test_dashboard_store_exposes_image_media_without_xml_body(self) -> None:
+        with temp_dir() as root:
+            decrypted = root / "decrypted"
+            decrypted.mkdir()
+            account_root = root / "wechat" / "xwechat_files" / "wxid_self_abcd"
+            (account_root / "db_storage" / "message").mkdir(parents=True)
+            peer_username = "wxid_peer"
+            table = "Msg_" + hashlib.md5(peer_username.encode("utf-8")).hexdigest()
+            create_time = 1700000000
+            month = datetime.datetime.fromtimestamp(create_time).strftime("%Y-%m")
+            thumb_dir = account_root / "cache" / month / "Message" / table[4:] / "Thumb"
+            thumb_dir.mkdir(parents=True)
+            attach_dir = account_root / "msg" / "attach" / table[4:] / month / "Img"
+            attach_dir.mkdir(parents=True)
+            storage_dir = account_root / "FileStorage" / "Image" / month
+            storage_dir.mkdir(parents=True)
+            thumb_bytes = b"\xff\xd8\xff\xe0JFIF\x00\xff\xd9"
+            image_md5 = "48ceaa4143631e21cc0eb8760f95bf09"
+            xor_key = 0xA7
+            (storage_dir / f"{image_md5}.dat").write_bytes(bytes(value ^ xor_key for value in thumb_bytes))
+            (attach_dir / f"1_{create_time}_t.dat").write_bytes(bytes(value ^ xor_key for value in thumb_bytes))
+            (thumb_dir / f"1_{create_time}_thumb.jpg").write_bytes(thumb_bytes)
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "filters": {"accounts": ["wxid_self"]},
+                        "databases": [
+                            {
+                                "source": str(account_root / "db_storage" / "message" / "message_0.db"),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            message_db = decrypted / "message_0-test.db"
+            con = sqlite3.connect(str(message_db))
+            try:
+                con.execute("CREATE TABLE Name2Id (user_name TEXT, is_session INTEGER)")
+                con.execute("INSERT INTO Name2Id (rowid, user_name, is_session) VALUES (7, ?, 1)", (peer_username,))
+                con.execute(
+                    f'CREATE TABLE "{table}" ('
+                    "local_id INTEGER, server_id INTEGER, local_type INTEGER, sort_seq INTEGER, "
+                    "real_sender_id INTEGER, create_time INTEGER, status INTEGER, upload_status INTEGER, "
+                    "download_status INTEGER, server_seq INTEGER, origin_source INTEGER, source BLOB, "
+                    "message_content TEXT, compress_content TEXT, packed_info_data BLOB, "
+                    "WCDB_CT_message_content BLOB, WCDB_CT_source BLOB)"
+                )
+                image_xml = (
+                    '<?xml version="1.0"?><msg><img cdnthumbwidth="100" cdnthumbheight="150" '
+                    f'cdnthumblength="12" length="42" md5="{image_md5}"></img></msg>'
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "upload_status, download_status, server_seq, origin_source, source, message_content, "
+                    "compress_content, packed_info_data, WCDB_CT_message_content, WCDB_CT_source) "
+                    "VALUES (1, 123, 3, 1, 7, ?, 3, 0, 0, 0, 0, x'', ?, '', x'', x'', x'')",
+                    (create_time, image_xml),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            store = DashboardStore(decrypted)
+            item = store.messages(chat=peer_username)["items"][0]
+            self.assertEqual(item["message_kind"], "image")
+            self.assertEqual(item["message_content"], "[image]")
+            self.assertEqual(item["media"]["width"], 100)
+            self.assertTrue(item["media"]["available"])
+            self.assertEqual(item["media"]["source"], "cache-thumb")
+            self.assertIn("/api/wechat/media/image?", item["media"]["url"])
+
+            response = store.image_response(chat=peer_username, local_id=1, server_id=123)
+            self.assertEqual(response.content_type, "image/jpeg")
+            self.assertEqual(response.body, thumb_bytes)
+
+    def test_dashboard_store_resolves_weixin4_attach_image_by_message_time(self) -> None:
+        with temp_dir() as root:
+            decrypted = root / "decrypted"
+            decrypted.mkdir()
+            account_root = root / "wechat" / "xwechat_files" / "wxid_self_abcd"
+            (account_root / "db_storage" / "message").mkdir(parents=True)
+            peer_username = "wxid_peer"
+            table = "Msg_" + hashlib.md5(peer_username.encode("utf-8")).hexdigest()
+            create_time = 1700000000
+            month = datetime.datetime.fromtimestamp(create_time).strftime("%Y-%m")
+            attach_dir = account_root / "msg" / "attach" / table[4:] / month / "Img"
+            attach_dir.mkdir(parents=True)
+            thumb_bytes = b"\xff\xd8\xff\xe0JFIF\x00\xff\xd9"
+            xor_key = 0x41
+            (attach_dir / f"1_{create_time}_t.dat").write_bytes(bytes(value ^ xor_key for value in thumb_bytes))
+            (root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "filters": {"accounts": ["wxid_self"]},
+                        "databases": [
+                            {
+                                "source": str(account_root / "db_storage" / "message" / "message_0.db"),
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            message_db = decrypted / "message_0-test.db"
+            con = sqlite3.connect(str(message_db))
+            try:
+                con.execute("CREATE TABLE Name2Id (user_name TEXT, is_session INTEGER)")
+                con.execute("INSERT INTO Name2Id (rowid, user_name, is_session) VALUES (7, ?, 1)", (peer_username,))
+                con.execute(
+                    f'CREATE TABLE "{table}" ('
+                    "local_id INTEGER, server_id INTEGER, local_type INTEGER, sort_seq INTEGER, "
+                    "real_sender_id INTEGER, create_time INTEGER, status INTEGER, upload_status INTEGER, "
+                    "download_status INTEGER, server_seq INTEGER, origin_source INTEGER, source BLOB, "
+                    "message_content TEXT, compress_content TEXT, packed_info_data BLOB)"
+                )
+                image_xml = (
+                    '<?xml version="1.0"?><msg><img cdnthumbwidth="100" cdnthumbheight="150" '
+                    'cdnthumblength="12" length="42" md5="48ceaa4143631e21cc0eb8760f95bf09" /></msg>'
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "upload_status, download_status, server_seq, origin_source, source, message_content, "
+                    "compress_content, packed_info_data) "
+                    "VALUES (1, 123, 3, 1, 7, ?, 3, 0, 0, 0, 0, x'', ?, '', x'')",
+                    (create_time, image_xml),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            store = DashboardStore(decrypted)
+            item = store.messages(chat=peer_username)["items"][0]
+            self.assertTrue(item["media"]["available"])
+            self.assertEqual(item["media"]["source"], "attach-thumb")
+
+            response = store.image_response(chat=peer_username, local_id=1, server_id=123)
+            self.assertEqual(response.content_type, "image/jpeg")
+            self.assertEqual(response.body, thumb_bytes)
+
+    def test_dashboard_store_uses_xwechat_config_for_custom_media_root(self) -> None:
+        with temp_dir() as root:
+            appdata = root / "AppData" / "Roaming"
+            config_dir = appdata / "Tencent" / "xwechat" / "config"
+            config_dir.mkdir(parents=True)
+            wechat_root = root / "custom-wechat"
+            account_root = wechat_root / "xwechat_files" / "wxid_self_abcd"
+            (account_root / "db_storage" / "message").mkdir(parents=True)
+            config_dir.joinpath("profile.ini").write_text(str(wechat_root), encoding="utf-8")
+
+            decrypted = root / "decrypted"
+            decrypted.mkdir()
+            peer_username = "wxid_peer"
+            table = "Msg_" + hashlib.md5(peer_username.encode("utf-8")).hexdigest()
+            create_time = 1700000000
+            month = datetime.datetime.fromtimestamp(create_time).strftime("%Y-%m")
+            attach_dir = account_root / "msg" / "attach" / table[4:] / month / "Img"
+            attach_dir.mkdir(parents=True)
+            thumb_bytes = b"\xff\xd8\xff\xe0JFIF\x00\xff\xd9"
+            xor_key = 0x52
+            (attach_dir / f"1_{create_time}_t.dat").write_bytes(bytes(value ^ xor_key for value in thumb_bytes))
+
+            message_db = decrypted / "message_0-test.db"
+            con = sqlite3.connect(str(message_db))
+            try:
+                con.execute("CREATE TABLE Name2Id (user_name TEXT, is_session INTEGER)")
+                con.execute("INSERT INTO Name2Id (rowid, user_name, is_session) VALUES (7, ?, 1)", (peer_username,))
+                con.execute(
+                    f'CREATE TABLE "{table}" ('
+                    "local_id INTEGER, server_id INTEGER, local_type INTEGER, sort_seq INTEGER, "
+                    "real_sender_id INTEGER, create_time INTEGER, status INTEGER, message_content TEXT, "
+                    "compress_content TEXT, packed_info_data BLOB)"
+                )
+                image_xml = (
+                    '<?xml version="1.0"?><msg><img cdnthumbwidth="100" cdnthumbheight="150" '
+                    'cdnthumblength="12" length="42" md5="48ceaa4143631e21cc0eb8760f95bf09" /></msg>'
+                )
+                con.execute(
+                    f'INSERT INTO "{table}" '
+                    "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                    "message_content, compress_content, packed_info_data) "
+                    "VALUES (1, 123, 3, 1, 7, ?, 3, ?, '', x'')",
+                    (create_time, image_xml),
+                )
+                con.commit()
+            finally:
+                con.close()
+
+            with patch.dict(os.environ, {"APPDATA": str(appdata)}):
+                store = DashboardStore(decrypted)
+                item = store.messages(chat=peer_username)["items"][0]
+                response = store.image_response(chat=peer_username, local_id=1, server_id=123)
+
+            self.assertTrue(item["media"]["available"])
+            self.assertEqual(item["media"]["source"], "attach-thumb")
+            self.assertEqual(response.body, thumb_bytes)
+
+    def test_decode_wechat_v4_image_uses_fixed_aes_key_and_tail_xor(self) -> None:
+        plain_head = b"\xff\xd8\xff\xe0JFIF\x00head"
+        pad = bytes([16]) * 16
+        plain_tail = b"tail\xff\xd9"
+        xor_key = 0x33
+        header = b"\x07\x08V2\x08\x07" + struct.pack("<H", len(plain_head)) + (b"\x00" * 7)
+        encrypted_tail = bytes(value ^ xor_key for value in plain_tail)
+        payload = header + (b"encrypted-block!!"[:16]) + encrypted_tail
+
+        class FakeAes:
+            def __init__(self, key: bytes):
+                self.key = key
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def decrypt(self, ciphertext: bytes) -> bytes:
+                return plain_head + pad
+
+        with patch("wechat_agent_cli.dashboard.AesEcbDecryptor", FakeAes):
+            self.assertEqual(decode_wechat_v4_image(payload), plain_head + plain_tail)
 
 
 if __name__ == "__main__":

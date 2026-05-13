@@ -11,10 +11,13 @@ from .decrypt import decrypt_databases
 from .key_extract import extract_wechat_key
 from .keys import (
     extract_key_with_command,
+    fingerprint_image_key,
     fingerprint_key,
     load_database_keys,
+    load_image_key,
     load_key,
     save_database_keys,
+    save_image_key,
     save_key,
 )
 from .scanner import scan_environment
@@ -59,6 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     key = subparsers.add_parser("key", help="Save or extract a database key.")
     key.add_argument("--profile", default="default", help="Profile name for persisted key lookup.")
     key.add_argument("--key", dest="manual_key", help="64- or 96-character hexadecimal database key.")
+    key.add_argument("--image-key", dest="manual_image_key", help="32-character hex or 16-character ASCII image key.")
     key.add_argument(
         "--auto",
         action="store_true",
@@ -158,6 +162,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.add_argument("--host", default="127.0.0.1", help="Host to bind. Defaults to 127.0.0.1.")
     serve.add_argument("--port", type=int, default=8765, help="Port to bind. Defaults to 8765.")
+    serve.add_argument("--profile", default="default", help="Saved key profile. Defaults to default.")
+    serve.add_argument(
+        "--image-key",
+        help="Optional 32-character hex or 16-character ASCII key for decrypting WeChat V2 local image files.",
+    )
     serve.set_defaults(func=cmd_serve)
 
     return parser
@@ -209,6 +218,27 @@ def cmd_key(args: argparse.Namespace) -> int:
     if sum(selected_sources) > 1:
         raise ValueError("Use only one of --key, --external-cmd, or --auto.")
     public_details: dict = {}
+    manual_image_details: dict = {}
+    image_key_saved = False
+    if args.manual_image_key:
+        save_image_key(args.workspace, args.profile, args.manual_image_key, source="manual")
+        image_key_saved = True
+        manual_image_details["image_key"] = True
+        manual_image_details["image_key_fingerprint"] = fingerprint_image_key(args.manual_image_key)
+        if not any(selected_sources):
+            payload = {
+                "ok": True,
+                "profile": args.profile,
+                "source": "manual-image",
+                "saved": True,
+                "image_key_saved": True,
+                "image_key_fingerprint": manual_image_details["image_key_fingerprint"],
+            }
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print(f"Image key profile '{args.profile}' ready. Fingerprint: {payload['image_key_fingerprint']}")
+            return 0
     if args.manual_key:
         key = args.manual_key
         source = "manual"
@@ -225,6 +255,9 @@ def cmd_key(args: argparse.Namespace) -> int:
             raise ValueError("Auto extraction did not return any usable key.")
         source = "auto"
         public_details = extraction.to_public_dict()
+        if extraction.image_key_hex and not args.manual_image_key:
+            save_image_key(args.workspace, args.profile, extraction.image_key_hex, source=source)
+            image_key_saved = True
     elif args.external_cmd:
         key = extract_key_with_command(args.external_cmd)
         source = "external"
@@ -248,7 +281,9 @@ def cmd_key(args: argparse.Namespace) -> int:
         "source": source,
         "saved": saved,
         "fingerprint": fingerprint_key(key),
+        "image_key_saved": image_key_saved,
     }
+    public_details.update(manual_image_details)
     payload.update(
         {field: value for field, value in public_details.items() if field not in {"ok", "fingerprint"}}
     )
@@ -322,7 +357,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     decrypted_dir = args.decrypted_dir or latest_decrypted_dir(args.workspace)
-    run_dashboard_server(decrypted_dir=decrypted_dir, host=args.host, port=args.port)
+    image_key = args.image_key or load_image_key(args.workspace, args.profile)
+    run_dashboard_server(decrypted_dir=decrypted_dir, host=args.host, port=args.port, image_key=image_key)
     return 0
 
 

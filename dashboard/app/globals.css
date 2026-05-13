@@ -74,6 +74,81 @@ button:disabled {
   color: #0f172a;
 }
 
+html {
+  scrollbar-color: #94a3b8 transparent;
+  scrollbar-width: thin;
+}
+
+* {
+  scrollbar-color: #94a3b8 transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.scrollbar-subtle {
+  scrollbar-color: #94a3b8 transparent;
+  scrollbar-gutter: stable;
+}
+
+.scrollbar-subtle::-webkit-scrollbar {
+  width: 10px;
+}
+
+.scrollbar-subtle::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+.scrollbar-subtle:hover::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  background-clip: content-box;
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  * {
+    scrollbar-color: #475569 transparent;
+  }
+
+  *::-webkit-scrollbar-thumb,
+  .scrollbar-subtle::-webkit-scrollbar-thumb {
+    background: #334155;
+    background-clip: content-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover,
+  .scrollbar-subtle:hover::-webkit-scrollbar-thumb {
+    background: #64748b;
+    background-clip: content-box;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

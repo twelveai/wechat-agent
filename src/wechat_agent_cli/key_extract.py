@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import hmac
+import json
 import os
 import re
 import struct
@@ -13,7 +14,9 @@ from typing import Iterable
 
 from ctypes import wintypes
 
-from .keys import fingerprint_key
+from .dashboard import account_from_source_path, account_roots_from_manifest, account_roots_from_windows_config
+from .keys import fingerprint_image_key, fingerprint_key
+from .native_crypto import AesEcbDecryptor
 
 SQLITE_HEADER = b"SQLite format 3\x00"
 PROCESS_QUERY_INFORMATION = 0x0400
@@ -32,6 +35,7 @@ MAX_PATH = 260
 PAGE_SIZE = 4096
 SALT_SIZE = 16
 KEY_SIZE = 32
+IMAGE_KEY_SIZE = 16
 IV_SIZE = 16
 HMAC_SHA512_SIZE = 64
 AES_BLOCK_SIZE = 16
@@ -42,8 +46,19 @@ KEY_STUB_SUFFIX = (
     + struct.pack("<Q", KEY_SIZE)
     + struct.pack("<Q", 0x2F)
 )
-WECHAT_PROCESS_NAMES = {"weixin.exe", "wechat.exe"}
+WECHAT_V4_IMAGE_HEADER_SIZE = 0x0F
+WECHAT_V4_V2_IMAGE_HEADER = b"\x07\x08V2\x08\x07"
+IMAGE_HEAD_SIGNATURES = (
+    b"\xff\xd8\xff",
+    b"\x89PNG\r\n\x1a\n",
+    b"GIF87a",
+    b"GIF89a",
+    b"RIFF",
+    b"wxgf",
+)
+WECHAT_PROCESS_NAMES = {"weixin.exe", "wechat.exe", "wechatappex.exe"}
 RAW_KEY_RE = re.compile(rb"[xX]'([0-9a-fA-F]{96})'?", re.ASCII)
+IMAGE_ALNUM_KEY_RE = re.compile(rb"[^A-Za-z0-9]([A-Za-z0-9]{16}|[A-Za-z0-9]{24}|[A-Za-z0-9]{32})[^A-Za-z0-9]")
 
 
 class MemoryAccessError(RuntimeError):
@@ -72,8 +87,15 @@ class ProbeDatabase:
 
 
 @dataclass(frozen=True)
+class ImageKeyProbe:
+    path: Path
+    encrypted_block: bytes
+
+
+@dataclass(frozen=True)
 class KeyExtractionResult:
     key_hex: str | None
+    image_key_hex: str | None
     database_keys: dict[str, str]
     pid: int
     process_name: str
@@ -84,6 +106,7 @@ class KeyExtractionResult:
 
     def to_public_dict(self) -> dict:
         fingerprint = fingerprint_key(self.key_hex) if self.key_hex else None
+        image_fingerprint = fingerprint_image_key(self.image_key_hex) if self.image_key_hex else None
         return {
             "ok": True,
             "pid": self.pid,
@@ -93,6 +116,8 @@ class KeyExtractionResult:
             "candidate_count": self.candidate_count,
             "elapsed_seconds": round(self.elapsed_seconds, 3),
             "fingerprint": fingerprint,
+            "image_key": self.image_key_hex is not None,
+            "image_key_fingerprint": image_fingerprint,
             "database_key_count": len(self.database_keys),
             "database_key_fingerprints": {
                 name: fingerprint_key(value) for name, value in sorted(self.database_keys.items())
@@ -140,36 +165,68 @@ def extract_wechat_key(
     started = time.monotonic()
     probe_databases = collect_probe_databases(raw_dir or latest_raw_dir(workspace))
     legacy_probe_database = select_probe_database_from_probes(probe_databases)
+    image_probes = collect_image_key_probes(workspace)
 
     enable_debug_privilege()
     pid_list = [int(pid) for pid in pids]
     processes = processes_from_pids(pid_list) if pid_list else find_wechat_processes_native()
     if not processes:
-        raise RuntimeError("No running Weixin.exe or WeChat.exe process was found.")
+        raise RuntimeError("No running Weixin.exe, WeChat.exe, or WeChatAppEx.exe process was found.")
 
     errors: list[str] = []
+    best_result: KeyExtractionResult | None = None
     for process in processes:
         try:
             result = scan_process_for_key(
                 process=process,
                 probe_databases=probe_databases,
                 legacy_probe_database=legacy_probe_database,
+                image_probes=image_probes,
                 max_region_size=max_region_size,
                 max_candidates=max_candidates,
                 started=started,
             )
             if result:
-                return result
+                best_result = merge_extraction_results(best_result, result)
+                if best_result.key_hex and (not image_probes or best_result.image_key_hex):
+                    return best_result
         except MemoryAccessError as exc:
             errors.append(f"{process.name} pid={process.pid}: {exc}")
+
+    if best_result and best_result.key_hex:
+        return best_result
 
     detail = "; ".join(errors[:5])
     if detail:
         raise RuntimeError(
-            "Key not found. Run the terminal as Administrator, keep Weixin logged in, "
+            "Key not found. Run the terminal as Administrator, keep Weixin/WeChat logged in, "
             f"and retry. Access details: {detail}"
         )
-    raise RuntimeError("Key not found. Restart Weixin and retry while it is logged in.")
+    raise RuntimeError("Key not found. Restart Weixin/WeChat and retry while it is logged in.")
+
+
+def merge_extraction_results(
+    current: KeyExtractionResult | None,
+    incoming: KeyExtractionResult,
+) -> KeyExtractionResult:
+    if current is None:
+        return incoming
+    database_keys = dict(current.database_keys)
+    database_keys.update(incoming.database_keys)
+    key_hex = current.key_hex or incoming.key_hex
+    image_key_hex = current.image_key_hex or incoming.image_key_hex
+    detail_source = incoming if incoming.image_key_hex and not current.image_key_hex else current
+    return KeyExtractionResult(
+        key_hex=key_hex,
+        image_key_hex=image_key_hex,
+        database_keys=database_keys,
+        pid=detail_source.pid,
+        process_name=detail_source.process_name,
+        probe_database=current.probe_database or incoming.probe_database,
+        scanned_regions=current.scanned_regions + incoming.scanned_regions,
+        candidate_count=current.candidate_count + incoming.candidate_count,
+        elapsed_seconds=incoming.elapsed_seconds,
+    )
 
 
 def processes_from_pids(pids: Iterable[int]) -> list[ProcessInfo]:
@@ -211,6 +268,95 @@ def collect_probe_databases(raw_dir: Path) -> list[ProbeDatabase]:
 
 def select_probe_database(raw_dir: Path) -> Path:
     return select_probe_database_from_probes(collect_probe_databases(raw_dir)).path
+
+
+def collect_image_key_probes(workspace: Path, max_probes: int = 8) -> list[ImageKeyProbe]:
+    roots = collect_account_roots_for_media(workspace)
+    probes: list[ImageKeyProbe] = []
+    fallback_thumb_probes: list[ImageKeyProbe] = []
+    for root in roots:
+        for path in iter_candidate_image_dat_files(root):
+            probe = image_key_probe_from_path(path)
+            if not probe:
+                continue
+            if path.name.lower().endswith("_t.dat"):
+                fallback_thumb_probes.append(probe)
+            else:
+                probes.append(probe)
+            if len(probes) >= max_probes:
+                return probes
+    if probes:
+        return probes
+    return fallback_thumb_probes[:max_probes]
+
+
+def collect_account_roots_for_media(workspace: Path) -> list[Path]:
+    roots: list[Path] = []
+    account_names: list[str] = []
+    manifests = sorted(
+        (workspace / "work").glob("*/manifest.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ) if (workspace / "work").exists() else []
+    for manifest in manifests:
+        roots.extend(account_roots_from_manifest(manifest))
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for value in payload.get("filters", {}).get("accounts", []):
+            if isinstance(value, str) and value:
+                account_names.append(value)
+        for item in payload.get("databases", []):
+            source = item.get("source") if isinstance(item, dict) else None
+            account = account_from_source_path(source)
+            if account:
+                account_names.append(account)
+    roots.extend(account_roots_from_windows_config(account_names))
+    if not roots:
+        roots.extend(account_roots_from_windows_config([]))
+    return dedupe_existing_paths(roots)
+
+
+def dedupe_existing_paths(paths: list[Path]) -> list[Path]:
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            continue
+        if not resolved.exists() or resolved in seen:
+            continue
+        result.append(resolved)
+        seen.add(resolved)
+    return result
+
+
+def iter_candidate_image_dat_files(account_root: Path) -> Iterable[Path]:
+    patterns = [
+        "msg/attach/*/*/Img/*.dat",
+        "msg/attach/*/*/Rec/*/Img/*.dat",
+        "cache/*/Message/*/Bubble/*.dat",
+        "FileStorage/Image/*/*.dat",
+    ]
+    for pattern in patterns:
+        try:
+            yield from account_root.glob(pattern)
+        except OSError:
+            continue
+
+
+def image_key_probe_from_path(path: Path) -> ImageKeyProbe | None:
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(WECHAT_V4_IMAGE_HEADER_SIZE + 16)
+    except OSError:
+        return None
+    if len(head) < WECHAT_V4_IMAGE_HEADER_SIZE + 16 or head[:6] != WECHAT_V4_V2_IMAGE_HEADER:
+        return None
+    encrypted_block = head[WECHAT_V4_IMAGE_HEADER_SIZE:WECHAT_V4_IMAGE_HEADER_SIZE + 16]
+    return ImageKeyProbe(path=path, encrypted_block=encrypted_block)
 
 
 def select_probe_database_from_probes(probes: list[ProbeDatabase]) -> ProbeDatabase:
@@ -287,6 +433,7 @@ def scan_process_for_key(
     process: ProcessInfo,
     probe_databases: list[ProbeDatabase],
     legacy_probe_database: ProbeDatabase,
+    image_probes: list[ImageKeyProbe],
     max_region_size: int,
     max_candidates: int,
     started: float,
@@ -298,8 +445,12 @@ def scan_process_for_key(
     try:
         regions = list_memory_regions(kernel32, handle, max_region_size=max_region_size)
         candidate_count = 0
+        image_candidate_count = 0
+        max_image_candidates = max(max_candidates * 20, 50_000)
         seen_pointers: set[int] = set()
         database_keys: dict[str, str] = {}
+        legacy_key_hex: str | None = None
+        image_key_hex: str | None = None
         salt_to_probes: dict[bytes, list[ProbeDatabase]] = {}
         for probe in probe_databases:
             salt_to_probes.setdefault(probe.salt, []).append(probe)
@@ -320,21 +471,40 @@ def scan_process_for_key(
                         database_keys[probe.path.name] = raw_key_hex.lower()
                 if len(database_keys) >= len(probe_databases):
                     break
-            if len(database_keys) >= len(probe_databases):
+            if extraction_is_complete(database_keys, legacy_key_hex, image_key_hex, image_probes):
                 return KeyExtractionResult(
-                    key_hex=next(iter(database_keys.values())),
+                    key_hex=extracted_database_key(database_keys, legacy_key_hex),
+                    image_key_hex=image_key_hex,
                     database_keys=database_keys,
                     pid=process.pid,
                     process_name=process.name,
-                    probe_database=None,
+                    probe_database=None if database_keys else (str(legacy_probe_database.path) if legacy_key_hex else None),
                     scanned_regions=len(regions),
                     candidate_count=candidate_count,
                     elapsed_seconds=time.monotonic() - started,
                 )
             if candidate_count > max_candidates:
                 break
-            if database_keys:
-                continue
+            if image_probes and not image_key_hex:
+                for image_key in iter_alnum_image_key_candidates(data):
+                    image_candidate_count += 1
+                    if image_candidate_count > max_image_candidates:
+                        break
+                    if validate_wechat_image_key(image_key, image_probes):
+                        image_key_hex = image_key.hex()
+                        break
+                if extraction_is_complete(database_keys, legacy_key_hex, image_key_hex, image_probes):
+                    return KeyExtractionResult(
+                        key_hex=extracted_database_key(database_keys, legacy_key_hex),
+                        image_key_hex=image_key_hex,
+                        database_keys=database_keys,
+                        pid=process.pid,
+                        process_name=process.name,
+                        probe_database=None if database_keys else (str(legacy_probe_database.path) if legacy_key_hex else None),
+                        scanned_regions=len(regions),
+                        candidate_count=candidate_count + image_candidate_count,
+                        elapsed_seconds=time.monotonic() - started,
+                    )
             for pointer in iter_key_pointers(data):
                 if pointer in seen_pointers:
                     continue
@@ -343,35 +513,76 @@ def scan_process_for_key(
                 if candidate_count > max_candidates:
                     break
                 candidate = read_process_memory(kernel32, handle, pointer, KEY_SIZE)
-                if not looks_like_key_material(candidate):
-                    continue
-                if verify_wechat_sqlcipher_key(candidate, legacy_probe_database.page):
+                if not image_key_hex and validate_wechat_image_key(candidate, image_probes):
+                    image_key_hex = candidate[:IMAGE_KEY_SIZE].hex()
+                if (
+                    not database_keys
+                    and not legacy_key_hex
+                    and looks_like_key_material(candidate)
+                    and verify_wechat_sqlcipher_key(candidate, legacy_probe_database.page)
+                ):
+                    legacy_key_hex = candidate.hex()
+                if extraction_is_complete(database_keys, legacy_key_hex, image_key_hex, image_probes):
                     return KeyExtractionResult(
-                        key_hex=candidate.hex(),
-                        database_keys={},
+                        key_hex=extracted_database_key(database_keys, legacy_key_hex),
+                        image_key_hex=image_key_hex,
+                        database_keys=database_keys,
                         pid=process.pid,
                         process_name=process.name,
-                        probe_database=str(legacy_probe_database.path),
+                        probe_database=None if database_keys else (str(legacy_probe_database.path) if legacy_key_hex else None),
                         scanned_regions=len(regions),
-                        candidate_count=candidate_count,
+                        candidate_count=candidate_count + image_candidate_count,
                         elapsed_seconds=time.monotonic() - started,
                     )
             if candidate_count > max_candidates:
                 break
-        if database_keys:
+        if database_keys or legacy_key_hex or image_key_hex:
             return KeyExtractionResult(
-                key_hex=next(iter(database_keys.values())),
+                key_hex=extracted_database_key(database_keys, legacy_key_hex),
+                image_key_hex=image_key_hex,
                 database_keys=database_keys,
                 pid=process.pid,
                 process_name=process.name,
-                probe_database=None,
+                probe_database=None if database_keys else (str(legacy_probe_database.path) if legacy_key_hex else None),
                 scanned_regions=len(regions),
-                candidate_count=candidate_count,
+                candidate_count=candidate_count + image_candidate_count,
                 elapsed_seconds=time.monotonic() - started,
             )
     finally:
         kernel32.CloseHandle(handle)
     return None
+
+
+def extracted_database_key(database_keys: dict[str, str], legacy_key_hex: str | None) -> str | None:
+    return next(iter(database_keys.values()), None) or legacy_key_hex
+
+
+def extraction_is_complete(
+    database_keys: dict[str, str],
+    legacy_key_hex: str | None,
+    image_key_hex: str | None,
+    image_probes: list[ImageKeyProbe],
+) -> bool:
+    return (bool(database_keys) or legacy_key_hex is not None) and (not image_probes or image_key_hex is not None)
+
+
+def validate_wechat_image_key(candidate: bytes, probes: list[ImageKeyProbe]) -> bool:
+    if not probes or len(candidate) < IMAGE_KEY_SIZE:
+        return False
+    key = candidate[:IMAGE_KEY_SIZE]
+    if key == b"\x00" * IMAGE_KEY_SIZE or len(set(key)) < 4:
+        return False
+    try:
+        with AesEcbDecryptor(key) as aes:
+            return any(looks_like_image_head(aes.decrypt(probe.encrypted_block)) for probe in probes)
+    except Exception:
+        return False
+
+
+def looks_like_image_head(data: bytes) -> bool:
+    if data.startswith(b"RIFF"):
+        return len(data) >= 12 and data[8:12] == b"WEBP"
+    return data.startswith(IMAGE_HEAD_SIGNATURES)
 
 
 def iter_raw_key_hex_strings(data: bytes) -> Iterable[str]:
@@ -413,6 +624,17 @@ def iter_key_pointers(data: bytes) -> Iterable[int]:
         if 0x10000 <= pointer <= 0x00007FFFFFFFFFFF:
             yield pointer
         start = suffix_at + 1
+
+
+def iter_alnum_image_key_candidates(data: bytes) -> Iterable[bytes]:
+    yielded: set[bytes] = set()
+    for match in IMAGE_ALNUM_KEY_RE.finditer(data):
+        content = match.group(1)
+        for offset in range(0, len(content) - IMAGE_KEY_SIZE + 1):
+            key = content[offset:offset + IMAGE_KEY_SIZE]
+            if key not in yielded:
+                yielded.add(key)
+                yield key
 
 
 def looks_like_key_material(candidate: bytes) -> bool:
@@ -514,7 +736,7 @@ def find_wechat_processes_native() -> list[ProcessInfo]:
                 processes.append(ProcessInfo(pid=int(entry.th32ProcessID), name=name))
             if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
                 break
-        return processes
+        return sorted(processes, key=lambda item: (item.name.lower() == "wechatappex.exe", item.pid))
     finally:
         kernel32.CloseHandle(snapshot)
 

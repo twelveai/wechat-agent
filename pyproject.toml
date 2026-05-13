@@ -17,5 +17,8 @@ wechat-agent = "wechat_agent_cli.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+wechat_agent_cli = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -8,6 +8,21 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ path: string[] }> },
 ) {
+  return proxyWechat(request, context, "GET");
+}
+
+export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+) {
+  return proxyWechat(request, context, "POST");
+}
+
+async function proxyWechat(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> },
+  method: "GET" | "POST",
+) {
   const params = await context.params;
   const base = process.env.WECHAT_AGENT_API_BASE ?? DEFAULT_API_BASE;
   const upstream = new URL(`/api/${params.path.join("/")}`, base);
@@ -15,17 +30,20 @@ export async function GET(
 
   try {
     const response = await fetch(upstream, {
+      body: method === "POST" ? await request.text() : undefined,
       cache: "no-store",
       headers: {
-        Accept: "application/json",
+        Accept: request.headers.get("accept") ?? "*/*",
+        ...(method === "POST" ? { "Content-Type": request.headers.get("content-type") ?? "application/json" } : {}),
       },
+      method,
     });
-    const body = await response.text();
+    const body = await response.arrayBuffer();
     return new Response(body, {
       status: response.status,
       headers: {
         "Content-Type": response.headers.get("content-type") ?? "application/json; charset=utf-8",
-        "Cache-Control": "no-store",
+        "Cache-Control": response.headers.get("cache-control") ?? "no-store",
       },
     });
   } catch (error) {

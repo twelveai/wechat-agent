@@ -32,6 +32,29 @@ def fingerprint_key(value: str) -> str:
     return f"sha256:{digest[:12]}:{key[:4]}...{key[-4:]}"
 
 
+def normalize_image_key(value: str | bytes) -> str:
+    if isinstance(value, bytes):
+        if len(value) != 16:
+            raise ValueError("Image key bytes must be exactly 16 bytes.")
+        return value.hex()
+    stripped = value.strip().strip('"').strip("'")
+    if stripped.lower().startswith("0x"):
+        stripped = stripped[2:]
+    stripped = re.sub(r"[\s:-]", "", stripped)
+    if re.fullmatch(r"[a-fA-F0-9]{32}", stripped):
+        return stripped.lower()
+    raw = value.strip().encode("utf-8")
+    if len(raw) == 16:
+        return raw.hex()
+    raise ValueError("Image key must be 32 hexadecimal characters or 16 ASCII characters.")
+
+
+def fingerprint_image_key(value: str | bytes) -> str:
+    key = normalize_image_key(value)
+    digest = hashlib.sha256(bytes.fromhex(key)).hexdigest()
+    return f"sha256:{digest[:12]}:{key[:4]}...{key[-4:]}"
+
+
 def secrets_path(workspace: Path) -> Path:
     return workspace / "secrets.json"
 
@@ -46,12 +69,15 @@ def load_secrets(workspace: Path) -> dict:
 def save_key(workspace: Path, profile: str, value: str, source: str) -> None:
     key = normalize_key(value)
     payload = load_secrets(workspace)
-    payload.setdefault("profiles", {})[profile] = {
-        "key": key,
-        "fingerprint": fingerprint_key(key),
-        "source": source,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    profile_payload = payload.setdefault("profiles", {}).setdefault(profile, {})
+    profile_payload.update(
+        {
+            "key": key,
+            "fingerprint": fingerprint_key(key),
+            "source": source,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
     path = secrets_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -85,6 +111,24 @@ def save_database_keys(workspace: Path, profile: str, values: dict[str, str], so
     restrict_owner_only(path)
 
 
+def save_image_key(workspace: Path, profile: str, value: str | bytes, source: str) -> None:
+    key = normalize_image_key(value)
+    payload = load_secrets(workspace)
+    profile_payload = payload.setdefault("profiles", {}).setdefault(profile, {})
+    profile_payload.update(
+        {
+            "image_key": key,
+            "image_key_fingerprint": fingerprint_image_key(key),
+            "image_key_source": source,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    path = secrets_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    restrict_owner_only(path)
+
+
 def load_key(workspace: Path, profile: str) -> str | None:
     payload = load_secrets(workspace)
     item = payload.get("profiles", {}).get(profile)
@@ -106,6 +150,17 @@ def load_database_keys(workspace: Path, profile: str) -> dict[str, str]:
         if value:
             result[name] = normalize_key(str(value))
     return result
+
+
+def load_image_key(workspace: Path, profile: str) -> str | None:
+    payload = load_secrets(workspace)
+    item = payload.get("profiles", {}).get(profile)
+    if not item:
+        return None
+    value = item.get("image_key")
+    if not value:
+        return None
+    return normalize_image_key(str(value))
 
 
 def extract_key_with_command(command: str, timeout: int = 60) -> str:

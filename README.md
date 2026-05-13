@@ -72,7 +72,7 @@ When `scan` shows multiple accounts, copy one account at a time:
 wechat-agent copy --account wxid_y048bdl6tkmy22 --core
 ```
 
-`--core` copies the login, message, contact, and session categories. You can narrow further:
+`--core` copies the login, message, contact, session, message_resource, and hardlink categories. The last two help the dashboard resolve local image files. You can narrow further:
 
 ```powershell
 wechat-agent copy --account wxid_y048bdl6tkmy22 --category message --name message_*.db
@@ -113,5 +113,17 @@ Available endpoints:
 - `GET /api/sessions?limit=&offset=`: recent sessions joined with contacts.
 - `GET /api/chats?q=&limit=&offset=`: message chat tables mapped from `Name2Id.user_name`.
 - `GET /api/messages?chat=&q=&type=&before=&after=&limit=&include_content=`: message query across one chat or all chats.
+- `POST /api/summary`: summarize text messages for one chat and time range through the OpenAI Responses API.
+
+Message summaries read OpenAI settings from `.wechat-agent/openai-responses.json` first, then `config/openai-responses.json`. Fill in:
+
+```json
+{
+  "url": "https://api.openai.com/v1/responses",
+  "api_key": "replace-with-your-openai-api-key"
+}
+```
+
+The fixed summary prompt lives at `src/wechat_agent_cli/prompts/wechat_message_summary.md`.
 
 For Weixin 4.1 message databases, chat message tables are mapped as `Msg_` + `md5(username)`, using the decrypted `Name2Id` table.
