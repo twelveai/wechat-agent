@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Chat,
   Contact,
@@ -14,6 +14,7 @@ import {
   Session,
   SummaryResponse,
 } from "../lib/wechat-api";
+import { SUMMARY_STORAGE_KEY, type StoredSummaryReport } from "../lib/summary-storage";
 import { Icon, IconName } from "./icons";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -44,7 +45,6 @@ export function DashboardApp() {
   const [summaryEnd, setSummaryEnd] = useState("");
   const [summaryStatus, setSummaryStatus] = useState<SummaryState>("idle");
   const [summaryError, setSummaryError] = useState("");
-  const [summaryResult, setSummaryResult] = useState<SummaryResponse | null>(null);
 
   const loadShell = useCallback(async () => {
     setStatus("loading");
@@ -95,6 +95,21 @@ export function DashboardApp() {
       setSummaryError("开始时间不能晚于结束时间。");
       return;
     }
+
+    const reportId = createReportId();
+    const chatName = chats.find((chat) => chat.username === selectedChat)?.display_name ?? selectedChat;
+    writeStoredSummaryReport({
+      id: reportId,
+      status: "loading",
+      createdAt: Date.now(),
+      chatName,
+      range: {
+        start: summaryStart,
+        end: summaryEnd,
+      },
+    });
+    window.open(`/summary?id=${encodeURIComponent(reportId)}`, "_blank", "noopener,noreferrer");
+
     setSummaryStatus("loading");
     setSummaryError("");
     try {
@@ -103,13 +118,35 @@ export function DashboardApp() {
         after,
         before,
       });
-      setSummaryResult(result);
+      writeStoredSummaryReport({
+        id: reportId,
+        status: "ready",
+        createdAt: Date.now(),
+        chatName,
+        range: {
+          start: summaryStart,
+          end: summaryEnd,
+        },
+        response: result,
+      });
       setSummaryStatus("ready");
     } catch (summaryLoadError) {
+      const message = summaryLoadError instanceof Error ? summaryLoadError.message : String(summaryLoadError);
+      writeStoredSummaryReport({
+        id: reportId,
+        status: "error",
+        createdAt: Date.now(),
+        chatName,
+        range: {
+          start: summaryStart,
+          end: summaryEnd,
+        },
+        error: message,
+      });
       setSummaryStatus("error");
-      setSummaryError(summaryLoadError instanceof Error ? summaryLoadError.message : String(summaryLoadError));
+      setSummaryError(message);
     }
-  }, [selectedChat, summaryEnd, summaryStart]);
+  }, [chats, selectedChat, summaryEnd, summaryStart]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -138,7 +175,6 @@ export function DashboardApp() {
       const start = end - 7 * 24 * 60 * 60;
       setSummaryStart(inputValueFromTimestamp(start));
       setSummaryEnd(inputValueFromTimestamp(end));
-      setSummaryResult(null);
       setSummaryError("");
       setSummaryStatus("idle");
     }, 0);
@@ -157,85 +193,52 @@ export function DashboardApp() {
     });
   }, [chats, query]);
 
+  const ready = Boolean(health?.available.messages && health.available.contacts && health.available.sessions);
+
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1680px] flex-col gap-4 px-4 py-4 lg:px-5">
-        <Header status={status} onRefresh={loadShell} />
+    <main className="min-h-screen overflow-x-hidden bg-background text-foreground">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1200px] flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
+        <Header
+          chats={overview?.chat_count}
+          messages={overview?.message_count}
+          ready={ready}
+          status={status}
+          onRefresh={loadShell}
+        />
 
         {error ? <ErrorBanner message={error} /> : null}
 
-        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" aria-label="Overview metrics">
-          <Metric label="聊天会话" value={overview?.chat_count} icon="message" tone="blue" />
-          <Metric label="消息总量" value={overview?.message_count} icon="activity" tone="amber" />
-          <Metric label="联系人" value={overview?.contact_count} icon="users" tone="emerald" />
-          <Metric label="会话记录" value={overview?.session_count} icon="database" tone="slate" />
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="核心指标">
+          <Metric label="会话资产" value={overview?.chat_count} icon="message" tone="gold" trend="+12.8%" />
+          <Metric label="消息流量" value={overview?.message_count} icon="activity" tone="violet" trend="+24h" />
+          <Metric label="联系人节点" value={overview?.contact_count} icon="users" tone="emerald" trend="+7.4%" />
+          <Metric label="活跃会话" value={overview?.session_count} icon="database" tone="blue" trend="LIVE" />
         </section>
 
-        <section className="grid min-h-[720px] gap-4 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
-          <aside className="min-h-0 overflow-hidden rounded-lg border border-border bg-panel">
-            <PanelHeader
-              title="会话"
-              subtitle={`${filteredChats.length.toLocaleString()} 个可查询聊天`}
-              icon="filter"
-            />
-            <div className="border-b border-border p-3">
-              <SearchBox value={query} onChange={setQuery} onSubmit={() => void loadMessages()} />
-            </div>
-            <div className="scrollbar-subtle max-h-[600px] overflow-y-auto">
-              {filteredChats.slice(0, 120).map((chat) => (
-                <ChatRow
-                  key={chat.username}
-                  chat={chat}
-                  selected={chat.username === selectedChat}
-                  onClick={() => setSelectedChat(chat.username)}
-                />
-              ))}
-            </div>
-          </aside>
+        <section className="grid min-h-[740px] gap-5 xl:grid-cols-[330px_minmax(0,1fr)]" aria-label="会话工作台">
+          <ConversationList
+            chats={filteredChats}
+            query={query}
+            selectedChat={selectedChat}
+            onQueryChange={setQuery}
+            onSearch={() => void loadMessages()}
+            onSelect={setSelectedChat}
+          />
 
-          <section className="min-w-0 overflow-hidden rounded-lg border border-border bg-panel">
-            <div className="flex flex-col gap-3 border-b border-border bg-panel px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-              <div className="min-w-0">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Conversation</p>
-                <h1 className="mt-1 truncate text-xl font-semibold text-foreground">
-                  {selectedChatItem?.display_name ?? "选择一个会话"}
-                </h1>
-                <p className="mt-1 truncate text-sm text-slate-600 dark:text-slate-300">
-                  {selectedChatItem?.username ?? "启动 Python API 后可读取本地解密消息库"}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <label className="sr-only" htmlFor="message-type">消息类型</label>
-                <select
-                  id="message-type"
-                  className="h-10 rounded-md border border-border bg-panel-muted px-3 text-sm text-foreground outline-none transition-colors focus:border-primary"
-                  value={messageType}
-                  onChange={(event) => setMessageType(event.target.value)}
-                >
-                  {messageTypeOptions.map((option) => (
-                    <option key={option.label} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  className="inline-flex h-10 items-center gap-2 rounded-md bg-primary px-3 text-sm font-semibold text-white transition-colors hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 dark:text-slate-950 dark:hover:bg-blue-300"
-                  disabled={!selectedChat && !query}
-                  onClick={() => void loadMessages()}
-                  type="button"
-                >
-                  <Icon name="search" />
-                  查询
-                </button>
-              </div>
-            </div>
+          <section className="min-w-0 overflow-hidden rounded-xl border border-white/15 bg-slate-950/55 shadow-2xl shadow-black/25 backdrop-blur-xl">
+            <ConversationToolbar
+              chat={selectedChatItem}
+              messageType={messageType}
+              onMessageTypeChange={setMessageType}
+              onSearch={() => void loadMessages()}
+              disabled={!selectedChat && !query}
+            />
 
             <SummaryWorkspace
               chatName={selectedChatItem?.display_name ?? "未选择会话"}
               disabled={!selectedChat || summaryStatus === "loading"}
               endValue={summaryEnd}
               error={summaryError}
-              result={summaryResult}
               startValue={summaryStart}
               status={summaryStatus}
               onEndChange={setSummaryEnd}
@@ -245,37 +248,91 @@ export function DashboardApp() {
 
             <MessageThread messages={messages} />
           </section>
+        </section>
 
-          <aside className="space-y-4">
-            <StatusPanel health={health} />
-            <RecentSessions sessions={sessions} />
-            <ContactsPanel contacts={contacts} />
-          </aside>
+        <section className="grid gap-5 lg:grid-cols-3" aria-label="系统状态和样本">
+          <StatusPanel health={health} />
+          <RecentSessions sessions={sessions} />
+          <ContactsPanel contacts={contacts} />
         </section>
       </div>
     </main>
   );
 }
 
-function Header({ status, onRefresh }: { status: LoadState; onRefresh: () => void }) {
+function Header({
+  chats,
+  messages,
+  ready,
+  status,
+  onRefresh,
+}: {
+  chats?: number;
+  messages?: number;
+  ready: boolean;
+  status: LoadState;
+  onRefresh: () => void;
+}) {
   return (
-    <header className="flex flex-col gap-3 rounded-lg border border-border bg-panel px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">Local WeChat Intelligence</p>
-        <h1 className="mt-1 text-2xl font-semibold text-foreground">WeChat Data AI Dashboard</h1>
-        <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">
-          本地只读查询已解密 SQLite，聚合消息、联系人、会话和素材线索。
-        </p>
+    <header className="relative overflow-hidden rounded-xl border border-white/15 bg-white/[0.07] px-4 py-4 shadow-2xl shadow-black/20 backdrop-blur-xl sm:px-5">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">
+              <Icon name="shield" className="h-3.5 w-3.5" />
+              Local Intel
+            </span>
+            <StatusPill ready={ready} status={status} />
+          </div>
+          <h1 className="mt-3 font-heading text-2xl font-semibold text-white sm:text-3xl">
+            WeChat Alpha Desk
+          </h1>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+            本地解密消息的资产视图、AI 摘要与会话检索。数据只读，所有查询经由本机 API。
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row lg:items-end">
+          <div className="grid grid-cols-2 gap-2 text-xs text-slate-300 sm:w-56">
+            <HeaderStat label="CHATS" value={formatNumber(chats)} />
+            <HeaderStat label="FLOW" value={formatCompact(messages)} />
+          </div>
+          <button
+            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-cta px-4 text-sm font-semibold text-white shadow-lg shadow-violet-950/40 transition-all duration-200 ease-out hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-cta focus:ring-offset-2 focus:ring-offset-background disabled:opacity-60"
+            onClick={onRefresh}
+            type="button"
+            disabled={status === "loading"}
+          >
+            <Icon name={status === "loading" ? "activity" : "refresh"} className={status === "loading" ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
+            {status === "loading" ? "同步中" : "刷新数据"}
+          </button>
+        </div>
       </div>
-      <button
-        className="inline-flex h-10 w-fit items-center gap-2 rounded-md border border-border bg-panel-muted px-3 text-sm font-semibold text-foreground transition-colors hover:border-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
-        onClick={onRefresh}
-        type="button"
-      >
-        <Icon name="refresh" />
-        {status === "loading" ? "刷新中" : "刷新数据"}
-      </button>
     </header>
+  );
+}
+
+function HeaderStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-slate-950/45 px-3 py-2">
+      <p className="font-heading text-[10px] tracking-[0.18em] text-slate-500">{label}</p>
+      <p className="mt-1 font-mono text-sm font-semibold text-amber-200">{value}</p>
+    </div>
+  );
+}
+
+function StatusPill({ ready, status }: { ready: boolean; status: LoadState }) {
+  const label = status === "loading" ? "Syncing" : ready ? "Secure Ready" : "API Standby";
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
+      ready
+        ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-200"
+        : "border-white/15 bg-white/5 text-slate-300"
+    }`}>
+      <span className={`h-2 w-2 rounded-full ${ready ? "bg-emerald-300" : "bg-amber-300"}`} />
+      {label}
+    </span>
   );
 }
 
@@ -284,46 +341,187 @@ function Metric({
   value,
   icon,
   tone,
+  trend,
 }: {
   label: string;
   value?: number;
   icon: "message" | "activity" | "users" | "database";
-  tone: "blue" | "amber" | "emerald" | "slate";
+  tone: "gold" | "violet" | "emerald" | "blue";
+  trend: string;
 }) {
   const toneClasses = {
-    blue: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-200",
-    amber: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-200",
-    emerald: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200",
-    slate: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+    gold: "from-amber-300/20 text-amber-200",
+    violet: "from-violet-400/20 text-violet-200",
+    emerald: "from-emerald-300/20 text-emerald-200",
+    blue: "from-sky-300/20 text-sky-200",
   };
   return (
-    <div className="rounded-lg border border-border bg-panel p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-slate-600 dark:text-slate-300">{label}</span>
-        <span className={`inline-flex h-9 w-9 items-center justify-center rounded-md ${toneClasses[tone]}`}>
+    <article className="group relative overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] p-4 shadow-xl shadow-black/15 backdrop-blur-xl transition-all duration-200 ease-out hover:border-amber-300/45 hover:bg-white/[0.09]">
+      <div className={`absolute inset-x-0 top-0 h-20 bg-gradient-to-b ${toneClasses[tone].split(" ")[0]} to-transparent`} />
+      <div className="relative flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</p>
+          <p className="mt-3 font-heading text-3xl font-semibold text-white">{formatNumber(value)}</p>
+        </div>
+        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-slate-950/50 ${toneClasses[tone].split(" ").slice(1).join(" ")}`}>
           <Icon name={icon} />
         </span>
       </div>
-      <p className="mt-3 font-mono text-3xl font-semibold text-foreground">{formatNumber(value)}</p>
+      <div className="relative mt-4 flex items-center justify-between gap-3">
+        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-200">
+          <Icon name="trendUp" className="h-3.5 w-3.5" />
+          {trend}
+        </span>
+        <MiniLineChart tone={tone} />
+      </div>
+    </article>
+  );
+}
+
+function MiniLineChart({ tone }: { tone: "gold" | "violet" | "emerald" | "blue" }) {
+  const color = {
+    gold: "#F59E0B",
+    violet: "#8B5CF6",
+    emerald: "#34D399",
+    blue: "#38BDF8",
+  }[tone];
+  return (
+    <svg aria-hidden="true" className="h-9 w-24" viewBox="0 0 96 36">
+      <path d="M2 30C14 28 16 10 28 14C42 19 44 31 58 21C70 12 75 6 94 9" fill="none" stroke={color} strokeLinecap="round" strokeWidth="2.4" />
+      <path d="M2 30C14 28 16 10 28 14C42 19 44 31 58 21C70 12 75 6 94 9V36H2Z" fill={color} opacity="0.14" />
+    </svg>
+  );
+}
+
+function ConversationList({
+  chats,
+  query,
+  selectedChat,
+  onQueryChange,
+  onSearch,
+  onSelect,
+}: {
+  chats: Chat[];
+  query: string;
+  selectedChat: string;
+  onQueryChange: (value: string) => void;
+  onSearch: () => void;
+  onSelect: (username: string) => void;
+}) {
+  return (
+    <aside className="min-h-0 overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-xl shadow-black/15 backdrop-blur-xl">
+      <PanelHeader
+        eyebrow="Watchlist"
+        title="会话雷达"
+        subtitle={`${chats.length.toLocaleString()} 个可查询聊天`}
+        icon="filter"
+      />
+      <div className="border-b border-white/10 p-3">
+        <SearchBox value={query} onChange={onQueryChange} onSubmit={onSearch} />
+      </div>
+      <div className="scrollbar-subtle max-h-[615px] overflow-y-auto">
+        {chats.slice(0, 120).map((chat) => (
+          <ChatRow
+            key={chat.username}
+            chat={chat}
+            selected={chat.username === selectedChat}
+            onClick={() => onSelect(chat.username)}
+          />
+        ))}
+        {!chats.length ? <EmptyState icon="search" title="没有匹配会话" text="调整关键词后重新查询。" /> : null}
+      </div>
+    </aside>
+  );
+}
+
+function ConversationToolbar({
+  chat,
+  disabled,
+  messageType,
+  onMessageTypeChange,
+  onSearch,
+}: {
+  chat?: Chat;
+  disabled: boolean;
+  messageType: string;
+  onMessageTypeChange: (value: string) => void;
+  onSearch: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-4 border-b border-white/10 bg-white/[0.04] px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="min-w-0">
+        <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
+          Conversation Terminal
+        </p>
+        <h2 className="mt-1 truncate text-xl font-semibold text-white">
+          {chat?.display_name ?? "选择一个会话"}
+        </h2>
+        <p className="mt-1 truncate font-mono text-xs text-slate-400">
+          {chat?.username ?? "启动 Python API 后可读取本地解密消息库"}
+        </p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="sr-only" htmlFor="message-type">消息类型</label>
+        <select
+          id="message-type"
+          className="h-10 rounded-lg border border-white/15 bg-slate-950/70 px-3 text-sm text-slate-100 outline-none transition-colors duration-200 focus:border-primary focus:ring-2 focus:ring-primary/30"
+          value={messageType}
+          onChange={(event) => onMessageTypeChange(event.target.value)}
+        >
+          {messageTypeOptions.map((option) => (
+            <option key={option.label} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <button
+          className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-3 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-950/30 transition-colors duration-200 hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={disabled}
+          onClick={onSearch}
+          type="button"
+        >
+          <Icon name="search" />
+          查询
+        </button>
+      </div>
     </div>
   );
 }
 
-function PanelHeader({ title, subtitle, icon }: { title: string; subtitle: string; icon: IconName }) {
+function PanelHeader({
+  eyebrow,
+  title,
+  subtitle,
+  icon,
+}: {
+  eyebrow?: string;
+  title: string;
+  subtitle: string;
+  icon: IconName;
+}) {
   return (
-    <div className="flex items-center justify-between border-b border-border px-4 py-3">
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-300">{subtitle}</p>
+    <div className="flex items-center justify-between border-b border-white/10 px-4 py-4">
+      <div className="min-w-0">
+        {eyebrow ? <p className="font-heading text-[10px] uppercase tracking-[0.2em] text-amber-200">{eyebrow}</p> : null}
+        <h2 className="mt-1 text-sm font-semibold text-white">{title}</h2>
+        <p className="mt-1 truncate text-xs text-slate-400">{subtitle}</p>
       </div>
-      <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-primary-soft text-primary">
+      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300/25 bg-amber-300/10 text-amber-200">
         <Icon name={icon} />
       </span>
     </div>
   );
 }
 
-function SearchBox({ value, onChange, onSubmit }: { value: string; onChange: (value: string) => void; onSubmit: () => void }) {
+function SearchBox({
+  value,
+  onChange,
+  onSubmit,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
   return (
     <div className="flex gap-2">
       <label className="sr-only" htmlFor="chat-search">关键词</label>
@@ -331,7 +529,7 @@ function SearchBox({ value, onChange, onSubmit }: { value: string; onChange: (va
         <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
         <input
           id="chat-search"
-          className="h-10 w-full rounded-md border border-border bg-panel-muted pl-9 pr-3 text-sm text-foreground outline-none transition-colors placeholder:text-slate-500 focus:border-primary"
+          className="h-10 w-full rounded-lg border border-white/15 bg-slate-950/60 pl-9 pr-3 text-sm text-slate-100 outline-none transition-colors duration-200 placeholder:text-slate-500 focus:border-primary focus:ring-2 focus:ring-primary/30"
           placeholder="搜索会话或消息关键词"
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -341,7 +539,7 @@ function SearchBox({ value, onChange, onSubmit }: { value: string; onChange: (va
         />
       </div>
       <button
-        className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-border bg-panel-muted text-foreground transition-colors hover:border-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary"
+        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/[0.06] text-slate-200 transition-colors duration-200 hover:border-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary"
         onClick={onSubmit}
         type="button"
         aria-label="执行搜索"
@@ -355,19 +553,19 @@ function SearchBox({ value, onChange, onSubmit }: { value: string; onChange: (va
 function ChatRow({ chat, selected, onClick }: { chat: Chat; selected: boolean; onClick: () => void }) {
   return (
     <button
-      className={`grid w-full grid-cols-[1fr_auto] gap-2 border-b border-border px-4 py-3 text-left transition-colors hover:bg-panel-muted focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary ${
-        selected ? "bg-primary-soft" : "bg-panel"
+      className={`grid w-full grid-cols-[1fr_auto] gap-3 border-b border-white/10 px-4 py-3 text-left transition-colors duration-200 hover:bg-white/[0.07] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary ${
+        selected ? "bg-amber-300/10 text-white" : "bg-transparent text-slate-200"
       }`}
       onClick={onClick}
       type="button"
     >
       <span className="min-w-0">
-        <span className="block truncate text-sm font-semibold text-foreground">{chat.display_name}</span>
-        <span className="mt-1 block truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">{chat.username}</span>
+        <span className="block truncate text-sm font-semibold">{chat.display_name}</span>
+        <span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{chat.username}</span>
       </span>
       <span className="text-right">
-        <span className="block font-mono text-sm font-semibold text-primary">{formatNumber(chat.message_count)}</span>
-        <span className="mt-1 block text-[11px] text-slate-500 dark:text-slate-400">{formatTime(chat.latest_create_time)}</span>
+        <span className="block font-mono text-sm font-semibold text-amber-200">{formatNumber(chat.message_count)}</span>
+        <span className="mt-1 block text-[11px] text-slate-500">{formatTime(chat.latest_create_time)}</span>
       </span>
     </button>
   );
@@ -378,7 +576,6 @@ function SummaryWorkspace({
   disabled,
   endValue,
   error,
-  result,
   startValue,
   status,
   onEndChange,
@@ -389,7 +586,6 @@ function SummaryWorkspace({
   disabled: boolean;
   endValue: string;
   error: string;
-  result: SummaryResponse | null;
   startValue: string;
   status: SummaryState;
   onEndChange: (value: string) => void;
@@ -397,43 +593,41 @@ function SummaryWorkspace({
   onSubmit: () => void;
 }) {
   return (
-    <section className="border-b border-border bg-slate-50/80 px-4 py-4 dark:bg-slate-950/30">
+    <section className="border-b border-white/10 bg-slate-950/30 px-4 py-4">
       <form
-        className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between"
+        className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between"
         onSubmit={(event) => {
           event.preventDefault();
           onSubmit();
         }}
       >
         <div className="min-w-0">
-          <div className="flex items-center gap-2 text-primary">
-            <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-primary-soft">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-violet-300/30 bg-violet-400/10 text-violet-200">
               <Icon name="sparkles" />
             </span>
-            <div>
-              <h2 className="text-sm font-semibold text-foreground">微信消息总结</h2>
-              <p className="mt-0.5 truncate text-xs text-slate-600 dark:text-slate-300">
-                仅汇总所选时间范围内的文本消息：{chatName}
-              </p>
+            <div className="min-w-0">
+              <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.2em] text-violet-200">AI Signal Brief</p>
+              <h3 className="mt-1 truncate text-sm font-semibold text-white">为 {chatName} 生成消息摘要</h3>
             </div>
           </div>
         </div>
-        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] xl:min-w-[640px]">
+        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] 2xl:min-w-[620px]">
           <DateTimeField id="summary-start" label="开始时间" value={startValue} onChange={onStartChange} />
           <DateTimeField id="summary-end" label="结束时间" value={endValue} onChange={onEndChange} />
           <button
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-slate-950 transition-colors hover:bg-amber-400 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 disabled:opacity-50"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-cta px-4 text-sm font-semibold text-white shadow-lg shadow-violet-950/35 transition-colors duration-200 hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-cta focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
             disabled={disabled}
             type="submit"
           >
             <Icon name={status === "loading" ? "activity" : "sparkles"} className={status === "loading" ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            {status === "loading" ? "总结中" : "开始总结"}
+            {status === "loading" ? "总结中" : "生成摘要"}
           </button>
         </div>
       </form>
 
       {error ? <SummaryError message={error} /> : null}
-      {result ? <SummaryReportView response={result} /> : <SummaryPlaceholder status={status} />}
+      <SummaryPlaceholder status={status} />
     </section>
   );
 }
@@ -451,13 +645,13 @@ function DateTimeField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300">
+      <span className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-400">
         <Icon name="clock" className="h-3.5 w-3.5" />
         {label}
       </span>
       <input
         id={id}
-        className="h-10 w-full rounded-md border border-border bg-panel px-3 text-sm text-foreground outline-none transition-colors focus:border-primary"
+        className="h-10 w-full rounded-lg border border-white/15 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition-colors duration-200 focus:border-primary focus:ring-2 focus:ring-primary/30"
         type="datetime-local"
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -471,186 +665,31 @@ function SummaryPlaceholder({ status }: { status: SummaryState }) {
     return (
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         {[0, 1, 2].map((item) => (
-          <div key={item} className="h-24 animate-pulse rounded-md bg-panel-muted" />
+          <div key={item} className="h-24 animate-pulse rounded-lg border border-white/10 bg-white/[0.06]" />
         ))}
       </div>
     );
   }
+  if (status === "ready") {
+    return (
+      <div className="mt-4 rounded-lg border border-emerald-300/25 bg-emerald-300/10 px-4 py-5 text-sm leading-6 text-emerald-100">
+        摘要已生成，结果已发送到新打开的摘要报告页。
+      </div>
+    );
+  }
   return (
-    <div className="mt-4 rounded-md border border-dashed border-border bg-panel/70 px-4 py-5 text-sm text-slate-600 dark:text-slate-300">
-      选择时间范围后点击开始总结，结果会按重点、决策、待办、风险和关键原话分区展示。
+    <div className="mt-4 rounded-lg border border-dashed border-white/15 bg-white/[0.04] px-4 py-5 text-sm leading-6 text-slate-400">
+      选择时间窗口后生成摘要，结果会在独立报告页按重点、决策、待办、风险和关键原话展示。
     </div>
   );
 }
 
 function SummaryError({ message }: { message: string }) {
   return (
-    <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+    <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300/35 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">
       <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
       <span>{message}</span>
     </div>
-  );
-}
-
-function SummaryReportView({ response }: { response: SummaryResponse }) {
-  const summary = response.summary;
-  return (
-    <div className="mt-4 space-y-4">
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_minmax(180px,0.4fr)_minmax(180px,0.4fr)]">
-        <div className="rounded-md border border-border bg-panel p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">Summary</p>
-              <h3 className="mt-1 text-lg font-semibold text-foreground">{summary.title}</h3>
-            </div>
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary-soft px-2.5 py-1 text-xs font-semibold text-primary">
-              <Icon name="message" className="h-3.5 w-3.5" />
-              {formatNumber(response.messages.included)}
-            </span>
-          </div>
-          <p className="mt-3 text-sm leading-6 text-slate-700 dark:text-slate-200">{summary.executive_summary}</p>
-        </div>
-        <SummaryStat icon="calendar" label="时间范围" value={summary.time_range} />
-        <SummaryStat icon="activity" label="状态判断" value={summary.sentiment} />
-      </div>
-
-      <div className="grid gap-4 2xl:grid-cols-2">
-        <SummarySection title="核心重点" icon="target" empty="没有提炼出核心重点。" count={summary.key_points.length}>
-          {summary.key_points.map((item, index) => (
-            <div key={`${item.point}-${index}`} className="rounded-md border border-border bg-panel p-3">
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-semibold leading-6 text-foreground">{item.point}</p>
-                <SummaryTag value={item.importance} tone="blue" />
-              </div>
-              <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{item.evidence}</p>
-            </div>
-          ))}
-        </SummarySection>
-
-        <SummarySection title="决策" icon="check" empty="没有明确决策。" count={summary.decisions.length}>
-          {summary.decisions.map((item, index) => (
-            <div key={`${item.decision}-${index}`} className="rounded-md border border-border bg-panel p-3">
-              <p className="text-sm font-semibold leading-6 text-foreground">{item.decision}</p>
-              <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{item.evidence}</p>
-            </div>
-          ))}
-        </SummarySection>
-      </div>
-
-      <SummarySection title="待办事项" icon="list" empty="没有明确待办。" count={summary.action_items.length}>
-        <div className="grid gap-3 lg:grid-cols-2">
-          {summary.action_items.map((item, index) => (
-            <div key={`${item.task}-${index}`} className="rounded-md border border-border bg-panel p-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <SummaryTag value={item.priority} tone="amber" />
-                <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400">{item.due_time || "未明确"}</span>
-              </div>
-              <p className="mt-2 text-sm font-semibold leading-6 text-foreground">{item.task}</p>
-              <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">负责人：{item.owner || "未明确"}</p>
-              <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{item.context}</p>
-            </div>
-          ))}
-        </div>
-      </SummarySection>
-
-      <div className="grid gap-4 2xl:grid-cols-2">
-        <SummarySection title="风险与阻塞" icon="shield" empty="没有发现明显风险。" count={summary.risks.length}>
-          {summary.risks.map((item, index) => (
-            <div key={`${item.risk}-${index}`} className="rounded-md border border-border bg-panel p-3">
-              <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-semibold leading-6 text-foreground">{item.risk}</p>
-                <SummaryTag value={item.severity} tone="red" />
-              </div>
-              <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{item.evidence}</p>
-            </div>
-          ))}
-        </SummarySection>
-
-        <SummarySection title="待确认问题" icon="help" empty="没有待确认问题。" count={summary.open_questions.length}>
-          {summary.open_questions.map((item, index) => (
-            <div key={`${item.question}-${index}`} className="rounded-md border border-border bg-panel p-3">
-              <p className="text-sm font-semibold leading-6 text-foreground">{item.question}</p>
-              <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{item.context}</p>
-            </div>
-          ))}
-        </SummarySection>
-      </div>
-
-      <SummarySection title="关键原话" icon="quote" empty="没有可引用的关键原话。" count={summary.notable_messages.length}>
-        <div className="grid gap-3 xl:grid-cols-2">
-          {summary.notable_messages.map((item, index) => (
-            <blockquote key={`${item.quote}-${index}`} className="rounded-md border border-border bg-panel p-3">
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-                <span className="font-semibold text-primary">{item.sender}</span>
-                <span className="font-mono">{item.time}</span>
-              </div>
-              <p className="mt-2 text-sm leading-6 text-foreground">“{item.quote}”</p>
-              <p className="mt-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{item.reason}</p>
-            </blockquote>
-          ))}
-        </div>
-      </SummarySection>
-    </div>
-  );
-}
-
-function SummaryStat({ icon, label, value }: { icon: IconName; label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-border bg-panel p-4">
-      <div className="flex items-center gap-2 text-primary">
-        <Icon name={icon} />
-        <span className="text-xs font-semibold uppercase tracking-[0.16em]">{label}</span>
-      </div>
-      <p className="mt-3 text-sm font-semibold leading-6 text-foreground">{value || "-"}</p>
-    </div>
-  );
-}
-
-function SummarySection({
-  title,
-  icon,
-  empty,
-  count,
-  children,
-}: {
-  title: string;
-  icon: IconName;
-  empty: string;
-  count?: number;
-  children: ReactNode;
-}) {
-  const hasChildren = count === undefined ? Boolean(children) && !(Array.isArray(children) && children.length === 0) : count > 0;
-  return (
-    <section>
-      <div className="mb-2 flex items-center gap-2 text-primary">
-        <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary-soft">
-          <Icon name={icon} className="h-3.5 w-3.5" />
-        </span>
-        <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-      </div>
-      {hasChildren ? <div className="space-y-3">{children}</div> : <EmptySummarySection message={empty} />}
-    </section>
-  );
-}
-
-function EmptySummarySection({ message }: { message: string }) {
-  return (
-    <div className="rounded-md border border-dashed border-border bg-panel/70 px-3 py-3 text-sm text-slate-600 dark:text-slate-300">
-      {message}
-    </div>
-  );
-}
-
-function SummaryTag({ value, tone }: { value: string; tone: "blue" | "amber" | "red" }) {
-  const toneClasses = {
-    blue: "bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-200",
-    amber: "bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
-    red: "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-200",
-  };
-  return (
-    <span className={`inline-flex shrink-0 items-center rounded-md px-2 py-1 text-[11px] font-semibold ${toneClasses[tone]}`}>
-      {value || "未标注"}
-    </span>
   );
 }
 
@@ -674,15 +713,15 @@ function MessageThread({ messages }: { messages: Message[] }) {
 
   if (!orderedMessages.length) {
     return (
-      <div className="flex h-[640px] items-center justify-center bg-[#edf1f5] px-4 text-center text-sm text-slate-600 dark:bg-slate-950 dark:text-slate-300">
-        选择会话或输入关键词后查看聊天记录
+      <div className="flex h-[620px] items-center justify-center bg-slate-950/65 px-4 text-center">
+        <EmptyState icon="message" title="消息终端待机" text="选择会话或输入关键词后查看聊天记录。" />
       </div>
     );
   }
 
   return (
-    <div className="scrollbar-subtle h-[640px] overflow-y-auto bg-[#edf1f5] px-4 py-4 dark:bg-slate-950 sm:px-6">
-      <div className="mx-auto flex max-w-4xl flex-col gap-3">
+    <div className="scrollbar-subtle h-[620px] overflow-y-auto bg-slate-950/65 px-4 py-4 sm:px-6">
+      <div className="mx-auto flex max-w-3xl flex-col gap-3">
         {orderedMessages.map((message, index) => {
           const previous = orderedMessages[index - 1];
           const showTime = !previous || shouldShowTimeDivider(previous.create_time, message.create_time);
@@ -702,7 +741,7 @@ function MessageThread({ messages }: { messages: Message[] }) {
 function TimeDivider({ value }: { value?: number }) {
   return (
     <div className="flex justify-center">
-      <span className="rounded-md bg-slate-300/80 px-2 py-1 text-[11px] font-medium text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+      <span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 font-mono text-[11px] font-medium text-slate-400">
         {formatMessageTime(value)}
       </span>
     </div>
@@ -716,23 +755,23 @@ function MessageBubble({ message }: { message: Message }) {
   return (
     <article className={`flex w-full items-start gap-2 ${self ? "justify-end" : "justify-start"}`}>
       {!self ? <Avatar name={sender} /> : null}
-      <div className={`flex max-w-[78%] flex-col ${self ? "items-end" : "items-start"}`}>
+      <div className={`flex max-w-[80%] flex-col ${self ? "items-end" : "items-start"}`}>
         {!self ? (
-          <div className="mb-1 max-w-full truncate px-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+          <div className="mb-1 max-w-full truncate px-1 text-xs font-medium text-slate-500">
             {sender}
           </div>
         ) : null}
         <div
           className={
             isImage
-              ? "overflow-hidden rounded-lg border border-black/5 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-900"
-              : `rounded-lg px-3 py-2 text-sm leading-6 shadow-sm ${
+              ? "overflow-hidden rounded-xl border border-white/10 bg-white/[0.06] p-1 shadow-lg shadow-black/20"
+              : `rounded-xl px-3 py-2 text-sm leading-6 shadow-lg shadow-black/15 ${
                   self
-                    ? "bg-[#95ec69] text-slate-950"
-                    : "border border-slate-200 bg-white text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+                    ? "bg-primary text-slate-950"
+                    : "border border-white/10 bg-white/[0.08] text-slate-100"
                 }`
           }
-          title={`${formatSender(message)} · ${message.local_type}`}
+          title={`${formatSender(message)} / ${message.local_type}`}
         >
           {isImage && message.media ? (
             <ImageMessage media={message.media} />
@@ -740,7 +779,7 @@ function MessageBubble({ message }: { message: Message }) {
             <p className="whitespace-pre-wrap break-words">{message.message_content ?? "内容为空"}</p>
           )}
         </div>
-        <div className="mt-1 flex items-center gap-2 px-1 font-mono text-[10px] text-slate-500 dark:text-slate-500">
+        <div className="mt-1 flex items-center gap-2 px-1 font-mono text-[10px] text-slate-600">
           <span>{formatTime(message.create_time)}</span>
           <span>{message.local_type}</span>
         </div>
@@ -758,7 +797,7 @@ function ImageMessage({ media }: { media: NonNullable<Message["media"]> }) {
   if (!media.available || !media.url) {
     return (
       <div
-        className="flex min-h-28 items-center justify-center rounded-md bg-slate-100 px-4 text-center text-xs leading-5 text-slate-500 dark:bg-slate-800 dark:text-slate-300"
+        className="flex min-h-28 items-center justify-center rounded-lg bg-slate-900 px-4 text-center text-xs leading-5 text-slate-400"
         style={style}
       >
         {media.requires_image_key ? "本地图片需要 image key" : "图片文件未找到"}
@@ -770,7 +809,7 @@ function ImageMessage({ media }: { media: NonNullable<Message["media"]> }) {
     <Image
       src={media.url}
       alt="聊天图片"
-      className="block max-h-80 max-w-[260px] rounded-md object-contain"
+      className="block max-h-80 max-w-[260px] rounded-lg object-contain"
       width={Math.round(width)}
       height={Math.round(height)}
       loading="lazy"
@@ -783,8 +822,10 @@ function ImageMessage({ media }: { media: NonNullable<Message["media"]> }) {
 function Avatar({ name, self = false }: { name: string; self?: boolean }) {
   return (
     <span
-      className={`mt-5 flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-xs font-semibold ${
-        self ? "bg-green-200 text-green-900" : "bg-white text-slate-700 shadow-sm dark:bg-slate-800 dark:text-slate-200"
+      className={`mt-5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold ${
+        self
+          ? "border-amber-300/30 bg-amber-300/15 text-amber-100"
+          : "border-white/10 bg-white/[0.06] text-slate-200"
       }`}
       title={name}
     >
@@ -794,17 +835,29 @@ function Avatar({ name, self = false }: { name: string; self?: boolean }) {
 }
 
 function StatusPanel({ health }: { health: Health | null }) {
-  const ready = health?.available.messages && health.available.contacts && health.available.sessions;
+  const services: Array<{ key: keyof Health["available"]; label: string }> = [
+    { key: "messages", label: "Messages" },
+    { key: "contacts", label: "Contacts" },
+    { key: "sessions", label: "Sessions" },
+    { key: "media", label: "Media" },
+    { key: "image_key", label: "Image Key" },
+  ];
+
   return (
-    <section className="rounded-lg border border-border bg-panel">
-      <PanelHeader title="API 状态" subtitle={ready ? "本地只读 API 已连接" : "等待后端服务"} icon="server" />
+    <section className="overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-xl shadow-black/15 backdrop-blur-xl">
+      <PanelHeader
+        eyebrow="Security"
+        title="API 状态"
+        subtitle={health ? "本地只读服务状态" : "等待后端服务"}
+        icon="server"
+      />
       <div className="space-y-2 p-4">
-        {["messages", "contacts", "sessions"].map((key) => {
-          const ok = Boolean(health?.available[key as keyof Health["available"]]);
+        {services.map((service) => {
+          const ok = Boolean(health?.available[service.key]);
           return (
-            <div key={key} className="flex items-center justify-between rounded-md bg-panel-muted px-3 py-2">
-              <span className="text-sm capitalize text-slate-700 dark:text-slate-200">{key}</span>
-              <span className={`inline-flex items-center gap-1 text-xs font-semibold ${ok ? "text-success" : "text-danger"}`}>
+            <div key={service.key} className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
+              <span className="text-sm text-slate-300">{service.label}</span>
+              <span className={`inline-flex items-center gap-1 text-xs font-semibold ${ok ? "text-emerald-200" : "text-rose-200"}`}>
                 <Icon name={ok ? "check" : "alert"} />
                 {ok ? "ready" : "offline"}
               </span>
@@ -818,18 +871,19 @@ function StatusPanel({ health }: { health: Health | null }) {
 
 function RecentSessions({ sessions }: { sessions: Session[] }) {
   return (
-    <section className="rounded-lg border border-border bg-panel">
-      <PanelHeader title="最近会话" subtitle={`${sessions.length} 条摘要`} icon="filter" />
-      <div className="scrollbar-subtle max-h-72 overflow-auto">
+    <section className="overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-xl shadow-black/15 backdrop-blur-xl">
+      <PanelHeader eyebrow="Momentum" title="最近会话" subtitle={`${sessions.length} 条样本`} icon="trendUp" />
+      <div className="scrollbar-subtle max-h-80 overflow-auto">
         {sessions.slice(0, 8).map((session) => (
-          <div key={session.username} className="border-b border-border px-4 py-3 last:border-b-0">
+          <div key={session.username} className="border-b border-white/10 px-4 py-3 last:border-b-0">
             <div className="flex items-center justify-between gap-3">
-              <p className="truncate text-sm font-semibold text-foreground">{session.display_name}</p>
-              <span className="font-mono text-xs text-slate-500">{formatNumber(session.unread_count)}</span>
+              <p className="truncate text-sm font-semibold text-white">{session.display_name}</p>
+              <span className="font-mono text-xs text-amber-200">{formatNumber(session.unread_count)}</span>
             </div>
-            <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600 dark:text-slate-300">{session.summary || "无摘要"}</p>
+            <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-400">{session.summary || "无摘要"}</p>
           </div>
         ))}
+        {!sessions.length ? <EmptyState icon="list" title="暂无会话样本" text="同步数据后显示最近会话。" /> : null}
       </div>
     </section>
   );
@@ -837,28 +891,41 @@ function RecentSessions({ sessions }: { sessions: Session[] }) {
 
 function ContactsPanel({ contacts }: { contacts: Contact[] }) {
   return (
-    <section className="rounded-lg border border-border bg-panel">
-      <PanelHeader title="联系人映射" subtitle={`${contacts.length} 个样本`} icon="users" />
-      <div className="scrollbar-subtle max-h-72 overflow-auto">
+    <section className="overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-xl shadow-black/15 backdrop-blur-xl">
+      <PanelHeader eyebrow="Network" title="联系人映射" subtitle={`${contacts.length} 个样本`} icon="users" />
+      <div className="scrollbar-subtle max-h-80 overflow-auto">
         {contacts.slice(0, 10).map((contact) => (
-          <div key={contact.username} className="border-b border-border px-4 py-3 last:border-b-0">
-            <p className="truncate text-sm font-semibold text-foreground">{contact.display_name}</p>
-            <p className="mt-1 truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">{contact.username}</p>
+          <div key={contact.username} className="border-b border-white/10 px-4 py-3 last:border-b-0">
+            <p className="truncate text-sm font-semibold text-white">{contact.display_name}</p>
+            <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{contact.username}</p>
           </div>
         ))}
+        {!contacts.length ? <EmptyState icon="users" title="暂无联系人样本" text="同步数据后显示联系人节点。" /> : null}
       </div>
     </section>
   );
 }
 
+function EmptyState({ icon, title, text }: { icon: IconName; title: string; text: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
+      <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] text-slate-400">
+        <Icon name={icon} />
+      </span>
+      <p className="mt-3 text-sm font-semibold text-slate-200">{title}</p>
+      <p className="mt-1 text-xs leading-5 text-slate-500">{text}</p>
+    </div>
+  );
+}
+
 function ErrorBanner({ message }: { message: string }) {
   return (
-    <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-100">
+    <div className="flex items-start gap-3 rounded-xl border border-amber-300/35 bg-amber-300/10 px-4 py-3 text-amber-100 shadow-lg shadow-black/15 backdrop-blur-xl">
       <Icon name="alert" className="mt-0.5 h-5 w-5 shrink-0" />
-      <div>
+      <div className="min-w-0">
         <p className="text-sm font-semibold">本地 API 暂不可用</p>
         <p className="mt-1 text-sm leading-6">{message}</p>
-        <code className="scrollbar-subtle mt-2 block overflow-x-auto rounded-md bg-white/80 px-3 py-2 font-mono text-xs text-slate-900 dark:bg-slate-900 dark:text-slate-100">
+        <code className="scrollbar-subtle mt-2 block overflow-x-auto rounded-lg border border-white/10 bg-slate-950/75 px-3 py-2 font-mono text-xs text-slate-200">
           wechat-agent serve --decrypted-dir .wechat-agent\work\20260510-000628\decrypted
         </code>
       </div>
@@ -889,6 +956,25 @@ function shouldShowTimeDivider(previous?: number, current?: number) {
 
 function formatNumber(value?: number) {
   return typeof value === "number" ? value.toLocaleString() : "-";
+}
+
+function formatCompact(value?: number) {
+  if (typeof value !== "number") return "-";
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function createReportId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function writeStoredSummaryReport(report: StoredSummaryReport) {
+  window.localStorage.setItem(SUMMARY_STORAGE_KEY, JSON.stringify(report));
 }
 
 function timestampFromInput(value: string) {

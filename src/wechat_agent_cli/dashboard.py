@@ -6,6 +6,7 @@ import json
 import mimetypes
 import os
 import re
+import socket
 import sqlite3
 import struct
 import sys
@@ -27,8 +28,8 @@ from .scanner import normalize_account_part, read_windows_weixin_config_roots
 
 MAX_LIMIT = 500
 DEFAULT_LIMIT = 50
-SUMMARY_MESSAGE_LIMIT = 500
-SUMMARY_MAX_MESSAGE_CHARS = 1200
+SUMMARY_MESSAGE_LIMIT = 120
+SUMMARY_MAX_MESSAGE_CHARS = 800
 SUMMARY_CONFIG_ENV = "WECHAT_AGENT_OPENAI_CONFIG"
 SUMMARY_PROMPT_ENV = "WECHAT_AGENT_SUMMARY_PROMPT"
 DEFAULT_OPENAI_RESPONSES_MODEL = "gpt-4o-mini"
@@ -2210,6 +2211,12 @@ def call_openai_responses(config: OpenAIResponsesConfig, instructions: str, inpu
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise ValueError(f"OpenAI Responses API error {exc.code}: {truncate_text(detail, 800)}") from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise ValueError(
+            "OpenAI Responses API read timed out after "
+            f"{config.timeout_seconds}s. Try a smaller summary time range, or increase "
+            "timeout_seconds in .wechat-agent/openai-responses.json."
+        ) from exc
     except URLError as exc:
         raise ValueError(f"OpenAI Responses API is not reachable: {exc.reason}") from exc
     if config.stream:
@@ -2294,10 +2301,16 @@ def parse_summary_output(output_text: str, message_count: int, after: int | None
         summary["executive_summary"] = output_text.strip()
         summary["message_count"] = message_count
         return summary
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(extract_json_text(payload))
+        except json.JSONDecodeError:
+            pass
     if not isinstance(payload, dict):
         summary = empty_summary("模型返回格式不是 JSON 对象。", after, before)
         summary["message_count"] = message_count
         return summary
+    payload = unwrap_embedded_summary_payload(payload)
     summary = empty_summary("", after, before)
     summary.update(
         {
@@ -2321,6 +2334,41 @@ def parse_summary_output(output_text: str, message_count: int, after: int | None
         }
     )
     return summary
+
+
+def unwrap_embedded_summary_payload(payload: dict) -> dict:
+    embedded = payload.get("executive_summary")
+    if not isinstance(embedded, str):
+        return payload
+    try:
+        nested = json.loads(extract_json_text(embedded))
+    except json.JSONDecodeError:
+        return payload
+    if isinstance(nested, str):
+        try:
+            nested = json.loads(extract_json_text(nested))
+        except json.JSONDecodeError:
+            return payload
+    if not isinstance(nested, dict) or not looks_like_summary_payload(nested):
+        return payload
+    merged = dict(payload)
+    merged.update(nested)
+    return merged
+
+
+def looks_like_summary_payload(payload: dict) -> bool:
+    return any(
+        key in payload
+        for key in (
+            "executive_summary",
+            "key_points",
+            "decisions",
+            "action_items",
+            "risks",
+            "open_questions",
+            "notable_messages",
+        )
+    )
 
 
 def extract_json_text(output_text: str) -> str:

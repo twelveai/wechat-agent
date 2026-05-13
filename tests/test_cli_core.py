@@ -20,7 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from wechat_agent_cli.copying import copy_databases
-from wechat_agent_cli.dashboard import DashboardStore, decode_message_content, decode_wechat_v4_image
+from wechat_agent_cli.dashboard import (
+    DashboardStore,
+    OpenAIResponsesConfig,
+    call_openai_responses,
+    decode_message_content,
+    decode_wechat_v4_image,
+    parse_summary_output,
+)
 from wechat_agent_cli.decrypt import decrypt_databases
 from wechat_agent_cli.key_extract import (
     HMAC_SHA512_SIZE,
@@ -573,6 +580,39 @@ class DashboardStoreTests(unittest.TestCase):
             self.assertEqual(result["messages"]["included"], 2)
             self.assertEqual(result["summary"]["message_count"], 2)
             self.assertEqual(result["openai"]["response_id"], "resp_test")
+
+    def test_openai_summary_timeout_has_actionable_message(self) -> None:
+        config = OpenAIResponsesConfig(
+            url="https://api.example.test/v1/responses",
+            api_key="sk-test",
+            timeout_seconds=12,
+        )
+        with patch("wechat_agent_cli.dashboard.urlopen", side_effect=TimeoutError("The read operation timed out")):
+            with self.assertRaisesRegex(ValueError, "read timed out after 12s"):
+                call_openai_responses(config=config, instructions="instructions", input_text="input")
+
+    def test_parse_summary_output_unwraps_json_in_executive_summary(self) -> None:
+        nested = {
+            "title": "结构化摘要",
+            "executive_summary": "这是正常摘要正文。",
+            "message_count": 0,
+            "time_range": "2026-05-14",
+            "sentiment": "积极",
+            "key_points": [{"point": "重点", "importance": "高", "evidence": "证据"}],
+            "decisions": [{"decision": "决策", "evidence": "依据"}],
+            "action_items": [{"task": "任务", "owner": "负责人", "due_time": "今天", "priority": "高", "context": "上下文"}],
+            "risks": [{"risk": "风险", "severity": "低", "evidence": "迹象"}],
+            "open_questions": [{"question": "问题", "context": "背景"}],
+            "notable_messages": [{"time": "10:00", "sender": "甲", "quote": "原话", "reason": "原因"}],
+        }
+        output = json.dumps({"title": "外层", "executive_summary": json.dumps(nested, ensure_ascii=False)}, ensure_ascii=False)
+
+        summary = parse_summary_output(output, message_count=3, after=None, before=None)
+
+        self.assertEqual(summary["title"], "结构化摘要")
+        self.assertEqual(summary["executive_summary"], "这是正常摘要正文。")
+        self.assertEqual(summary["message_count"], 3)
+        self.assertEqual(summary["key_points"][0]["point"], "重点")
 
     def test_dashboard_store_exposes_image_media_without_xml_body(self) -> None:
         with temp_dir() as root:

@@ -7,7 +7,7 @@
 ---
 
 **Project:** WeChat Agent Dashboard
-**Generated:** 2026-05-13 23:21:29
+**Generated:** 2026-05-13 23:44:07
 **Category:** Fintech/Crypto
 
 ---
@@ -153,20 +153,21 @@
 
 ## Style Guidelines
 
-**Style:** Glassmorphism
+**Style:** Dark Mode (OLED)
 
-**Keywords:** Frosted glass, transparent, blurred background, layered, vibrant background, light source, depth, multi-layer
+**Keywords:** Dark theme, low light, high contrast, deep black, midnight blue, eye-friendly, OLED, night mode, power efficient
 
-**Best For:** Modern SaaS, financial dashboards, high-end corporate, lifestyle apps, modal overlays, navigation
+**Best For:** Night-mode apps, coding platforms, entertainment, eye-strain prevention, OLED devices, low-light
 
-**Key Effects:** Backdrop blur (10-20px), subtle border (1px solid rgba white 0.2), light reflection, Z-depth
+**Key Effects:** Minimal glow (text-shadow: 0 0 10px), dark-to-light transitions, low white emission, high readability, visible focus
 
 ### Page Pattern
 
-**Pattern Name:** Conversion-Optimized
+**Pattern Name:** Scroll-Triggered Storytelling
 
-- **CTA Placement:** Above fold
-- **Section Order:** Hero > Features > CTA
+- **Conversion Strategy:** Narrative increases time-on-page 3x. Use progress indicator. Mobile: simplify animations.
+- **CTA Placement:** End of each chapter (mini) + Final climax CTA
+- **Section Order:** 1. Intro hook, 2. Chapter 1 (problem), 3. Chapter 2 (journey), 4. Chapter 3 (solution), 5. Climax CTA
 
 ---
 

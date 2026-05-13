@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "WeChat Data AI Dashboard",
-  description: "Local dashboard for decrypted WeChat data, messages, contacts, and sessions.",
+  title: "WeChat Alpha Desk",
+  description: "Fintech-style local dashboard for decrypted WeChat messages, contacts, sessions, and AI summaries.",
 };
 
 export default function RootLayout({
