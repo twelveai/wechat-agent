@@ -10,13 +10,14 @@ import socket
 import sqlite3
 import struct
 import sys
+import threading
 import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
@@ -24,6 +25,9 @@ import xml.etree.ElementTree as ET
 
 from .native_crypto import AesEcbDecryptor
 from .scanner import normalize_account_part, read_windows_weixin_config_roots
+
+if TYPE_CHECKING:
+    from .sync import AutoSyncConfig, AutoSyncWorker
 
 
 MAX_LIMIT = 500
@@ -209,6 +213,7 @@ class MediaFileCandidate:
 
 class DashboardStore:
     def __init__(self, decrypted_dir: Path, image_key: str | bytes | None = None):
+        self._lock = threading.RLock()
         self.databases = discover_databases(decrypted_dir)
         self.image_key = normalize_image_key(image_key or os.environ.get("WECHAT_AGENT_IMAGE_KEY"))
         self._chat_tables: dict[str, str] | None = None
@@ -216,6 +221,32 @@ class DashboardStore:
         self._account_roots: list[Path] | None = None
         self._resource_chat_ids: dict[str, int] | None = None
         self._media_file_cache: dict[tuple[str, str, str], MediaFileCandidate | None] = {}
+
+    @contextmanager
+    def locked(self):
+        with self._lock:
+            yield
+
+    def reload(self, decrypted_dir: Path) -> None:
+        databases = discover_databases(decrypted_dir)
+        if not databases.message or not databases.contact or not databases.session:
+            missing = [
+                name
+                for name, value in {
+                    "message": databases.message,
+                    "contact": databases.contact,
+                    "session": databases.session,
+                }.items()
+                if not value
+            ]
+            raise ValueError(f"synced decrypted directory is missing dashboard databases: {', '.join(missing)}")
+        with self._lock:
+            self.databases = databases
+            self._chat_tables = None
+            self._self_username = None
+            self._account_roots = None
+            self._resource_chat_ids = None
+            self._media_file_cache = {}
 
     def health(self) -> dict:
         return {
@@ -938,12 +969,14 @@ class DashboardStore:
 
 class DashboardHandler(BaseHTTPRequestHandler):
     store: DashboardStore
+    sync_worker: AutoSyncWorker | None = None
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         try:
-            payload = self.route_get(parsed.path, query)
+            with self.store.locked():
+                payload = self.route_get(parsed.path, query)
             if isinstance(payload, BinaryResponse):
                 self.write_binary(200, payload)
             else:
@@ -957,7 +990,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
         try:
-            payload = self.route_post(parsed.path, query, self.read_json_body())
+            with self.store.locked():
+                payload = self.route_post(parsed.path, query, self.read_json_body())
             self.write_json(200, payload)
         except ValueError as exc:
             self.write_json(400, {"ok": False, "error": str(exc)})
@@ -990,6 +1024,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return self.store.health()
         if path == "/api/databases":
             return {"ok": True, "databases": self.store.databases.to_dict()}
+        if path == "/api/sync/status":
+            if not self.sync_worker:
+                return {"ok": True, "enabled": False}
+            return self.sync_worker.status.snapshot()
         if path == "/api/overview":
             return self.store.overview()
         if path == "/api/contacts":
@@ -1063,17 +1101,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return
 
 
-def run_dashboard_server(decrypted_dir: Path, host: str, port: int, image_key: str | None = None) -> None:
+def run_dashboard_server(
+    decrypted_dir: Path,
+    host: str,
+    port: int,
+    image_key: str | None = None,
+    sync_config: AutoSyncConfig | None = None,
+) -> None:
     store = DashboardStore(decrypted_dir, image_key=image_key)
+    sync_worker: AutoSyncWorker | None = None
+    if sync_config:
+        from .sync import AutoSyncWorker
+
+        sync_worker = AutoSyncWorker(
+            sync_config,
+            on_decrypted=lambda decrypted_dir, _result: store.reload(decrypted_dir),
+            logger=safe_print,
+        )
 
     class Handler(DashboardHandler):
         pass
 
     Handler.store = store
+    Handler.sync_worker = sync_worker
     server = ThreadingHTTPServer((host, port), Handler)
     safe_print(f"Dashboard API listening on http://{host}:{port}")
     safe_print(f"Using decrypted databases from {store.databases.root}")
-    server.serve_forever()
+    if sync_worker:
+        sync_worker.start()
+        safe_print(
+            "Auto-sync enabled: "
+            f"interval={sync_config.interval_seconds}s core={sync_config.core} "
+            f"workspace={sync_config.workspace.resolve()}"
+        )
+    try:
+        server.serve_forever()
+    finally:
+        if sync_worker:
+            sync_worker.stop()
 
 
 def discover_databases(decrypted_dir: Path) -> DatabaseSet:

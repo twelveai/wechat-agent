@@ -27,6 +27,7 @@ from wechat_agent_cli.dashboard import (
     decode_message_content,
     decode_wechat_v4_image,
     parse_summary_output,
+    run_dashboard_server,
 )
 from wechat_agent_cli.decrypt import decrypt_databases
 from wechat_agent_cli.key_extract import (
@@ -43,6 +44,7 @@ from wechat_agent_cli.key_extract import (
 )
 from wechat_agent_cli.keys import fingerprint_key, load_key, normalize_key, save_key
 from wechat_agent_cli.scanner import scan_environment
+from wechat_agent_cli.sync import make_auto_sync_config, run_auto_sync_cycle
 from wechat_agent_cli.verify import verify_databases
 from wechat_agent_cli.workspace import ensure_gitignore_entry
 
@@ -64,6 +66,70 @@ def temp_dir():
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)
+
+
+def create_dashboard_message_db(path: Path, username: str, message_count: int) -> None:
+    table = "Msg_" + hashlib.md5(username.encode("utf-8")).hexdigest()
+    con = sqlite3.connect(str(path))
+    try:
+        con.execute("CREATE TABLE Name2Id (user_name TEXT, is_session INTEGER)")
+        con.execute("INSERT INTO Name2Id (rowid, user_name, is_session) VALUES (2, 'wxid_self', 0)")
+        con.execute("INSERT INTO Name2Id (rowid, user_name, is_session) VALUES (3, ?, 1)", (username,))
+        con.execute(
+            f'CREATE TABLE "{table}" ('
+            "local_id INTEGER, server_id INTEGER, local_type INTEGER, sort_seq INTEGER, "
+            "real_sender_id INTEGER, create_time INTEGER, status INTEGER, "
+            "message_content TEXT, compress_content TEXT, packed_info_data BLOB)"
+        )
+        for index in range(message_count):
+            con.execute(
+                f'INSERT INTO "{table}" '
+                "(local_id, server_id, local_type, sort_seq, real_sender_id, create_time, status, "
+                "message_content, compress_content, packed_info_data) "
+                "VALUES (?, ?, 1, ?, 2, ?, 3, ?, '', x'')",
+                (index + 1, index + 1, index + 1, 1700000000 + index, f"message {index + 1}"),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+
+def create_dashboard_contact_db(path: Path, username: str) -> None:
+    con = sqlite3.connect(str(path))
+    try:
+        con.execute(
+            "CREATE TABLE contact (id INTEGER, username TEXT, alias TEXT, remark TEXT, nick_name TEXT, "
+            "local_type INTEGER, verify_flag INTEGER, is_in_chat_room INTEGER, chat_room_type INTEGER, "
+            "delete_flag INTEGER)"
+        )
+        con.execute("INSERT INTO contact VALUES (1, ?, '', 'Peer', '', 0, 0, 0, 0, 0)", (username,))
+        con.commit()
+    finally:
+        con.close()
+
+
+def create_dashboard_session_db(path: Path, username: str) -> None:
+    con = sqlite3.connect(str(path))
+    try:
+        con.execute(
+            "CREATE TABLE SessionTable (username TEXT, type INTEGER, unread_count INTEGER, summary TEXT, "
+            "last_timestamp INTEGER, sort_timestamp INTEGER, last_msg_type INTEGER, last_msg_sender TEXT, "
+            "last_sender_display_name TEXT)"
+        )
+        con.execute(
+            "INSERT INTO SessionTable VALUES (?, 1, 0, 'summary', 1700000000, 1700000000, 1, ?, 'Peer')",
+            (username, username),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def create_dashboard_decrypted_set(root: Path, username: str, message_count: int) -> None:
+    root.mkdir(parents=True)
+    create_dashboard_message_db(root / "message_0-test.db", username, message_count)
+    create_dashboard_contact_db(root / "contact-test.db", username)
+    create_dashboard_session_db(root / "session-test.db", username)
 
 
 class KeyTests(unittest.TestCase):
@@ -272,6 +338,104 @@ class CopyDecryptVerifyTests(unittest.TestCase):
             self.assertTrue(verify_result["ok"])
             self.assertEqual(verify_result["databases"][0]["schema_family"], "wechat_4_message")
 
+    def test_decrypt_uses_global_key_when_database_key_map_misses(self) -> None:
+        with temp_dir() as root:
+            raw = root / "raw"
+            raw.mkdir()
+            first = raw / "known.db"
+            second = raw / "missing.db"
+            first.write_bytes(b"encrypted")
+            second.write_bytes(b"encrypted")
+            seen_keys: dict[str, str | None] = {}
+
+            def fake_decrypt_one_database(source, output_dir, key, provider_cmd):
+                seen_keys[source.name] = key
+                return {"ok": True, "source": str(source), "dest": str(output_dir / source.name), "method": "fake"}
+
+            with patch("wechat_agent_cli.decrypt.decrypt_one_database", fake_decrypt_one_database):
+                result = decrypt_databases(
+                    input_path=raw,
+                    output_dir=root / "decrypted",
+                    key=TEST_KEY,
+                    database_keys={"known.db": "b" * 64},
+                    provider_cmd=None,
+                )
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(seen_keys["known.db"], "b" * 64)
+            self.assertEqual(seen_keys["missing.db"], TEST_KEY)
+
+
+class AutoSyncTests(unittest.TestCase):
+    def test_auto_sync_cycle_copies_decrypts_and_exposes_dashboard_data(self) -> None:
+        with temp_dir() as root:
+            username = "wxid_sync"
+            account = root / "xwechat_files" / username / "db_storage"
+            message_dir = account / "message"
+            contact_dir = account / "contact"
+            session_dir = account / "session"
+            message_dir.mkdir(parents=True)
+            contact_dir.mkdir(parents=True)
+            session_dir.mkdir(parents=True)
+            create_dashboard_message_db(message_dir / "message_0.db", username, 2)
+            create_dashboard_contact_db(contact_dir / "contact.db", username)
+            create_dashboard_session_db(session_dir / "session.db", username)
+
+            reloaded: list[Path] = []
+            config = make_auto_sync_config(
+                workspace=root / ".wechat-agent",
+                data_dirs=[root / "xwechat_files"],
+                accounts=[username],
+                interval_seconds=5,
+            )
+            result = run_auto_sync_cycle(config, lambda decrypted_dir, _: reloaded.append(decrypted_dir))
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["copied"], 3)
+            self.assertEqual(result["decrypted"], 3)
+            self.assertEqual(len(reloaded), 1)
+            store = DashboardStore(reloaded[0])
+            overview = store.overview()
+            self.assertEqual(overview["chat_count"], 1)
+            self.assertEqual(overview["message_count"], 2)
+            self.assertEqual(overview["contact_count"], 1)
+            self.assertEqual(overview["session_count"], 1)
+
+    def test_dashboard_server_auto_sync_callback_accepts_sync_result(self) -> None:
+        with temp_dir() as root:
+            username = "wxid_sync"
+            initial = root / "initial"
+            create_dashboard_decrypted_set(initial, username, 1)
+            config = make_auto_sync_config(
+                workspace=root / ".wechat-agent",
+                data_dirs=[root],
+                interval_seconds=5,
+                sync_on_start=False,
+            )
+
+            class StopServer(Exception):
+                pass
+
+            class FakeServer:
+                def __init__(self, _address, handler):
+                    self.handler = handler
+
+                def serve_forever(self):
+                    decrypted = root / "next"
+                    create_dashboard_decrypted_set(decrypted, username, 2)
+                    self.handler.sync_worker.on_decrypted(decrypted, {"run_id": "test"})
+                    self.handler.sync_worker.stop()
+                    raise StopServer()
+
+            with patch("wechat_agent_cli.dashboard.ThreadingHTTPServer", FakeServer):
+                with self.assertRaises(StopServer):
+                    run_dashboard_server(
+                        decrypted_dir=initial,
+                        host="127.0.0.1",
+                        port=0,
+                        sync_config=config,
+                    )
+
 
 class DashboardStoreTests(unittest.TestCase):
     def test_decode_message_content_decompresses_zstd_blob(self) -> None:
@@ -281,6 +445,22 @@ class DashboardStoreTests(unittest.TestCase):
         blob = stdlib_zstd.compress(expected.encode("utf-8"))
 
         self.assertEqual(decode_message_content(blob), expected)
+
+    def test_reload_switches_to_new_decrypted_directory_and_clears_cache(self) -> None:
+        with temp_dir() as root:
+            username = "wxid_peer"
+            first = root / "first"
+            second = root / "second"
+            create_dashboard_decrypted_set(first, username, 1)
+            create_dashboard_decrypted_set(second, username, 3)
+
+            store = DashboardStore(first)
+            self.assertEqual(store.chats()["items"][0]["message_count"], 1)
+
+            store.reload(second)
+
+            self.assertEqual(store.databases.root, second.resolve())
+            self.assertEqual(store.chats()["items"][0]["message_count"], 3)
 
     def test_single_chat_sender_uses_name2id_rowid_not_contact_id(self) -> None:
         with temp_dir() as root:

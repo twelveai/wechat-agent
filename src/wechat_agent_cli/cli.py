@@ -21,6 +21,7 @@ from .keys import (
     save_key,
 )
 from .scanner import scan_environment
+from .sync import make_auto_sync_config
 from .verify import verify_databases
 from .workspace import default_workspace, ensure_workspace
 
@@ -166,6 +167,62 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--image-key",
         help="Optional 32-character hex or 16-character ASCII key for decrypting WeChat V2 local image files.",
+    )
+    serve.add_argument(
+        "--auto-sync",
+        action="store_true",
+        help="Continuously copy and decrypt live WeChat databases while serving the Dashboard API.",
+    )
+    serve.add_argument(
+        "--sync-interval",
+        type=int,
+        default=60,
+        help="Seconds between automatic sync cycles. Defaults to 60.",
+    )
+    serve.add_argument(
+        "--no-sync-on-start",
+        action="store_true",
+        help="Wait one interval before the first automatic sync.",
+    )
+    serve.add_argument(
+        "--sync-all",
+        action="store_true",
+        help="Copy all discovered databases during auto-sync. By default only dashboard core databases are copied.",
+    )
+    serve.add_argument(
+        "--sync-provider-cmd",
+        help="External decrypt command for auto-sync. Uses the same environment contract as decrypt --provider-cmd.",
+    )
+    serve.add_argument(
+        "--data-dir",
+        action="append",
+        type=Path,
+        default=[],
+        help="Root WeChat data directory to scan during auto-sync. Can be passed multiple times.",
+    )
+    serve.add_argument(
+        "--max-depth",
+        type=int,
+        default=7,
+        help="Maximum recursive depth for auto-sync data directory discovery.",
+    )
+    serve.add_argument(
+        "--account",
+        action="append",
+        default=[],
+        help="Auto-sync only databases for this wxid account. Can be passed multiple times.",
+    )
+    serve.add_argument(
+        "--category",
+        action="append",
+        default=[],
+        help="Auto-sync only this db_storage category. Can be passed multiple times.",
+    )
+    serve.add_argument(
+        "--name",
+        action="append",
+        default=[],
+        help="Auto-sync only database names matching this pattern. Can be passed multiple times.",
     )
     serve.set_defaults(func=cmd_serve)
 
@@ -358,8 +415,46 @@ def cmd_verify(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     decrypted_dir = args.decrypted_dir or latest_decrypted_dir(args.workspace)
     image_key = args.image_key or load_image_key(args.workspace, args.profile)
-    run_dashboard_server(decrypted_dir=decrypted_dir, host=args.host, port=args.port, image_key=image_key)
+    sync_config = None
+    if args.auto_sync:
+        ensure_workspace(args.workspace, update_gitignore=True)
+        sync_accounts = args.account or infer_accounts_from_manifest(decrypted_dir)
+        sync_config = make_auto_sync_config(
+            workspace=args.workspace,
+            data_dirs=args.data_dir,
+            max_depth=args.max_depth,
+            accounts=sync_accounts,
+            categories=args.category,
+            names=args.name,
+            core=not args.sync_all,
+            key=load_key(args.workspace, args.profile),
+            database_keys=load_database_keys(args.workspace, args.profile),
+            provider_cmd=args.sync_provider_cmd,
+            interval_seconds=args.sync_interval,
+            sync_on_start=not args.no_sync_on_start,
+        )
+    run_dashboard_server(
+        decrypted_dir=decrypted_dir,
+        host=args.host,
+        port=args.port,
+        image_key=image_key,
+        sync_config=sync_config,
+    )
     return 0
+
+
+def infer_accounts_from_manifest(decrypted_dir: Path) -> list[str]:
+    manifest_path = decrypted_dir.expanduser().resolve().parent / "manifest.json"
+    if not manifest_path.exists():
+        return []
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    accounts = payload.get("filters", {}).get("accounts", [])
+    if not isinstance(accounts, list):
+        return []
+    return [account for account in accounts if isinstance(account, str) and account]
 
 
 def latest_decrypted_dir(workspace: Path) -> Path:

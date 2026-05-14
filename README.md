@@ -105,9 +105,24 @@ wechat-agent serve --decrypted-dir .wechat-agent\work\20260510-000628\decrypted
 
 The server binds to `127.0.0.1:8765` by default and reads decrypted SQLite files in read-only mode.
 
+To keep the Dashboard data fresh while the API is running, enable automatic sync:
+
+```powershell
+wechat-agent serve --decrypted-dir .wechat-agent\work\20260510-000628\decrypted --auto-sync --sync-interval 60
+```
+
+With `--auto-sync`, the API keeps serving read-only requests while a background worker periodically hot-copies the live WeChat core databases, decrypts them into a new `.wechat-agent\work\autosync-*\decrypted` directory, then switches the API to that new decrypted set after the message/contact/session databases are available. By default auto-sync copies only Dashboard core categories; pass `--sync-all` to copy every discovered database, or use `--data-dir`, `--account`, `--category`, and `--name` to narrow the scan.
+
+Inspect sync state with:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/api/sync/status
+```
+
 Available endpoints:
 
 - `GET /api/health`: database availability and paths.
+- `GET /api/sync/status`: automatic sync status when `serve --auto-sync` is enabled.
 - `GET /api/overview`: chat, message, contact, and session counts.
 - `GET /api/contacts?q=&limit=&offset=`: contact list with display names.
 - `GET /api/sessions?limit=&offset=`: recent sessions joined with contacts.

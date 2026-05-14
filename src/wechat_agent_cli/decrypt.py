@@ -35,9 +35,7 @@ def decrypt_databases(
     result = {"ok": True, "output_dir": str(output_dir), "databases": []}
     database_keys = database_keys or {}
     for database in databases:
-        database_key = database_keys.get(database.name)
-        if database_key is None and not database_keys:
-            database_key = key
+        database_key = database_keys.get(database.name) or key
         item = decrypt_one_database(database, output_dir, key=database_key, provider_cmd=provider_cmd)
         result["databases"].append(item)
         if not item["ok"]:

@@ -20,6 +20,17 @@ import { Icon, IconName } from "./icons";
 type LoadState = "idle" | "loading" | "ready" | "error";
 type SummaryState = "idle" | "loading" | "ready" | "error";
 
+export type DashboardInitialData = {
+  health: Health | null;
+  overview: Overview | null;
+  contacts: Contact[];
+  sessions: Session[];
+  chats: Chat[];
+  messages: Message[];
+  selectedChat?: string;
+  error?: string;
+};
+
 const messageTypeOptions = [
   { label: "全部类型", value: "" },
   { label: "文本", value: "1" },
@@ -29,18 +40,30 @@ const messageTypeOptions = [
   { label: "拍一拍", value: "266287972401" },
 ];
 
-export function DashboardApp() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [selectedChat, setSelectedChat] = useState("");
+export function DashboardApp({ initialData }: { initialData?: DashboardInitialData }) {
+  const hasInitialData = Boolean(
+    initialData?.health ||
+      initialData?.overview ||
+      initialData?.contacts.length ||
+      initialData?.sessions.length ||
+      initialData?.chats.length ||
+      initialData?.messages.length,
+  );
+  const [health, setHealth] = useState<Health | null>(initialData?.health ?? null);
+  const [overview, setOverview] = useState<Overview | null>(initialData?.overview ?? null);
+  const [contacts, setContacts] = useState<Contact[]>(initialData?.contacts ?? []);
+  const [sessions, setSessions] = useState<Session[]>(initialData?.sessions ?? []);
+  const [chats, setChats] = useState<Chat[]>(initialData?.chats ?? []);
+  const [messages, setMessages] = useState<Message[]>(initialData?.messages ?? []);
+  const [selectedChat, setSelectedChat] = useState(
+    initialData?.selectedChat ?? initialData?.chats[0]?.username ?? "",
+  );
   const [query, setQuery] = useState("");
   const [messageType, setMessageType] = useState("");
-  const [status, setStatus] = useState<LoadState>("idle");
-  const [error, setError] = useState("");
+  const [status, setStatus] = useState<LoadState>(
+    hasInitialData ? "ready" : initialData?.error ? "error" : "idle",
+  );
+  const [error, setError] = useState(initialData?.error ?? "");
   const [summaryStart, setSummaryStart] = useState("");
   const [summaryEnd, setSummaryEnd] = useState("");
   const [summaryStatus, setSummaryStatus] = useState<SummaryState>("idle");
@@ -149,11 +172,12 @@ export function DashboardApp() {
   }, [chats, selectedChat, summaryEnd, summaryStart]);
 
   useEffect(() => {
+    if (hasInitialData && !initialData?.error) return;
     const timer = window.setTimeout(() => {
       void loadShell();
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [loadShell]);
+  }, [hasInitialData, initialData?.error, loadShell]);
 
   useEffect(() => {
     if (!selectedChat) return;
