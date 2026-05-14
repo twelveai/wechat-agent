@@ -1,7 +1,7 @@
 # Summary Page Overrides
 
 > **PROJECT:** WeChat Agent Dashboard
-> **Generated:** 2026-05-13 23:44:07
+> **Generated:** 2026-05-14 00:23:40
 > **Page Type:** Dashboard / Data View
 
 > ⚠️ **IMPORTANT:** Rules in this file **override** the Master file (`design-system/MASTER.md`).
@@ -15,7 +15,7 @@
 
 - **Max Width:** 800px (narrow, focused)
 - **Layout:** Single column, centered
-- **Sections:** 1. Intro hook, 2. Chapter 1 (problem), 3. Chapter 2 (journey), 4. Chapter 3 (solution), 5. Climax CTA
+- **Sections:** 1. Hero headline, 2. Short description, 3. Benefit bullets (3 max), 4. CTA, 5. Footer
 
 ### Spacing Overrides
 
@@ -27,12 +27,11 @@
 
 ### Color Overrides
 
-- **Strategy:** Progressive reveal. Each chapter has distinct color. Building intensity.
+- **Strategy:** Minimalist: Brand + white #FFFFFF + accent. Buttons: High contrast 7:1+. Text: Black/Dark grey
 
 ### Component Overrides
 
-- Avoid: Unoptimized full-size images
-- Avoid: No visual feedback on current location
+- No overrides — use Master component specs
 
 ---
 
@@ -45,6 +44,4 @@
 ## Recommendations
 
 - Effects: KPI value animations (count-up), trend arrow direction animations, metric card hover lift, alert pulse effect
-- Performance: Use appropriate size and format (WebP)
-- Navigation: Highlight active nav item with color/underline
-- CTA Placement: End of each chapter (mini) + Final climax CTA
+- CTA Placement: Center, large CTA button

@@ -197,7 +197,7 @@ export function DashboardApp() {
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1200px] flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1120px] flex-col gap-5 px-4 py-5 sm:px-6 lg:px-8">
         <Header
           chats={overview?.chat_count}
           messages={overview?.message_count}
@@ -215,7 +215,7 @@ export function DashboardApp() {
           <Metric label="活跃会话" value={overview?.session_count} icon="database" tone="blue" trend="LIVE" />
         </section>
 
-        <section className="grid min-h-[740px] gap-5 xl:grid-cols-[330px_minmax(0,1fr)]" aria-label="会话工作台">
+        <section className="grid min-h-[740px] gap-5 xl:grid-cols-[320px_minmax(0,1fr)]" aria-label="会话工作台">
           <ConversationList
             chats={filteredChats}
             query={query}
@@ -225,7 +225,7 @@ export function DashboardApp() {
             onSelect={setSelectedChat}
           />
 
-          <section className="min-w-0 overflow-hidden rounded-xl border border-white/15 bg-slate-950/55 shadow-2xl shadow-black/25 backdrop-blur-xl">
+          <section className="surface-card min-w-0 overflow-hidden">
             <ConversationToolbar
               chat={selectedChatItem}
               messageType={messageType}
@@ -274,32 +274,31 @@ function Header({
   onRefresh: () => void;
 }) {
   return (
-    <header className="relative overflow-hidden rounded-xl border border-white/15 bg-white/[0.07] px-4 py-4 shadow-2xl shadow-black/20 backdrop-blur-xl sm:px-5">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
+    <header className="surface-card px-4 py-4 sm:px-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">
+            <span className="soft-pill inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold">
               <Icon name="shield" className="h-3.5 w-3.5" />
               Local Intel
             </span>
             <StatusPill ready={ready} status={status} />
           </div>
-          <h1 className="mt-3 font-heading text-2xl font-semibold text-white sm:text-3xl">
+          <h1 className="mt-3 font-heading text-2xl font-semibold text-foreground sm:text-3xl">
             WeChat Alpha Desk
           </h1>
-          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-300">
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
             本地解密消息的资产视图、AI 摘要与会话检索。数据只读，所有查询经由本机 API。
           </p>
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row lg:items-end">
-          <div className="grid grid-cols-2 gap-2 text-xs text-slate-300 sm:w-56">
+          <div className="grid grid-cols-2 gap-2 text-xs text-slate-600 sm:w-56">
             <HeaderStat label="CHATS" value={formatNumber(chats)} />
             <HeaderStat label="FLOW" value={formatCompact(messages)} />
           </div>
           <button
-            className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-cta px-4 text-sm font-semibold text-white shadow-lg shadow-violet-950/40 transition-all duration-200 ease-out hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-cta focus:ring-offset-2 focus:ring-offset-background disabled:opacity-60"
+            className="primary-button inline-flex h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-cta focus:ring-offset-2 focus:ring-offset-background disabled:opacity-60"
             onClick={onRefresh}
             type="button"
             disabled={status === "loading"}
@@ -315,9 +314,9 @@ function Header({
 
 function HeaderStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-slate-950/45 px-3 py-2">
-      <p className="font-heading text-[10px] tracking-[0.18em] text-slate-500">{label}</p>
-      <p className="mt-1 font-mono text-sm font-semibold text-amber-200">{value}</p>
+    <div className="surface-muted rounded-lg px-3 py-2">
+      <p className="font-heading text-[10px] tracking-[0.12em] text-slate-500">{label}</p>
+      <p className="mt-1 font-mono text-sm font-semibold text-foreground">{value}</p>
     </div>
   );
 }
@@ -327,10 +326,10 @@ function StatusPill({ ready, status }: { ready: boolean; status: LoadState }) {
   return (
     <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
       ready
-        ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-200"
-        : "border-white/15 bg-white/5 text-slate-300"
+        ? "border-teal-200 bg-teal-50 text-teal-800"
+        : "border-slate-200 bg-white text-slate-600"
     }`}>
-      <span className={`h-2 w-2 rounded-full ${ready ? "bg-emerald-300" : "bg-amber-300"}`} />
+      <span className={`h-2 w-2 rounded-full ${ready ? "bg-teal-500" : "bg-orange-400"}`} />
       {label}
     </span>
   );
@@ -350,41 +349,35 @@ function Metric({
   trend: string;
 }) {
   const toneClasses = {
-    gold: "from-amber-300/20 text-amber-200",
-    violet: "from-violet-400/20 text-violet-200",
-    emerald: "from-emerald-300/20 text-emerald-200",
-    blue: "from-sky-300/20 text-sky-200",
+    gold: "bg-teal-50 text-primary",
+    violet: "bg-teal-50 text-primary",
+    emerald: "bg-teal-50 text-primary",
+    blue: "bg-teal-50 text-primary",
   };
   return (
-    <article className="group relative overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] p-4 shadow-xl shadow-black/15 backdrop-blur-xl transition-all duration-200 ease-out hover:border-amber-300/45 hover:bg-white/[0.09]">
-      <div className={`absolute inset-x-0 top-0 h-20 bg-gradient-to-b ${toneClasses[tone].split(" ")[0]} to-transparent`} />
-      <div className="relative flex items-start justify-between gap-3">
+    <article className="surface-card p-4 transition-shadow duration-200 hover:shadow-lg">
+      <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">{label}</p>
-          <p className="mt-3 font-heading text-3xl font-semibold text-white">{formatNumber(value)}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+          <p className="mt-3 font-heading text-3xl font-semibold text-foreground">{formatNumber(value)}</p>
         </div>
-        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-slate-950/50 ${toneClasses[tone].split(" ").slice(1).join(" ")}`}>
+        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${toneClasses[tone]}`}>
           <Icon name={icon} />
         </span>
       </div>
-      <div className="relative mt-4 flex items-center justify-between gap-3">
-        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-200">
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <span className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
           <Icon name="trendUp" className="h-3.5 w-3.5" />
           {trend}
         </span>
-        <MiniLineChart tone={tone} />
+        <MiniLineChart />
       </div>
     </article>
   );
 }
 
-function MiniLineChart({ tone }: { tone: "gold" | "violet" | "emerald" | "blue" }) {
-  const color = {
-    gold: "#F59E0B",
-    violet: "#8B5CF6",
-    emerald: "#34D399",
-    blue: "#38BDF8",
-  }[tone];
+function MiniLineChart() {
+  const color = "#0D9488";
   return (
     <svg aria-hidden="true" className="h-9 w-24" viewBox="0 0 96 36">
       <path d="M2 30C14 28 16 10 28 14C42 19 44 31 58 21C70 12 75 6 94 9" fill="none" stroke={color} strokeLinecap="round" strokeWidth="2.4" />
@@ -409,14 +402,14 @@ function ConversationList({
   onSelect: (username: string) => void;
 }) {
   return (
-    <aside className="min-h-0 overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-xl shadow-black/15 backdrop-blur-xl">
+    <aside className="surface-card min-h-0 overflow-hidden">
       <PanelHeader
         eyebrow="Watchlist"
         title="会话雷达"
         subtitle={`${chats.length.toLocaleString()} 个可查询聊天`}
         icon="filter"
       />
-      <div className="border-b border-white/10 p-3">
+      <div className="border-b border-border p-3">
         <SearchBox value={query} onChange={onQueryChange} onSubmit={onSearch} />
       </div>
       <div className="scrollbar-subtle max-h-[615px] overflow-y-auto">
@@ -448,15 +441,15 @@ function ConversationToolbar({
   onSearch: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-4 border-b border-white/10 bg-white/[0.04] px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="flex flex-col gap-4 border-b border-border bg-panel px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
       <div className="min-w-0">
-        <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-200">
+        <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.12em] text-primary">
           Conversation Terminal
         </p>
-        <h2 className="mt-1 truncate text-xl font-semibold text-white">
+        <h2 className="mt-1 truncate text-xl font-semibold text-foreground">
           {chat?.display_name ?? "选择一个会话"}
         </h2>
-        <p className="mt-1 truncate font-mono text-xs text-slate-400">
+        <p className="mt-1 truncate font-mono text-xs text-slate-500">
           {chat?.username ?? "启动 Python API 后可读取本地解密消息库"}
         </p>
       </div>
@@ -464,7 +457,7 @@ function ConversationToolbar({
         <label className="sr-only" htmlFor="message-type">消息类型</label>
         <select
           id="message-type"
-          className="h-10 rounded-lg border border-white/15 bg-slate-950/70 px-3 text-sm text-slate-100 outline-none transition-colors duration-200 focus:border-primary focus:ring-2 focus:ring-primary/30"
+          className="field-control h-10 rounded-lg px-3 text-sm transition-colors duration-200"
           value={messageType}
           onChange={(event) => onMessageTypeChange(event.target.value)}
         >
@@ -475,7 +468,7 @@ function ConversationToolbar({
           ))}
         </select>
         <button
-          className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-3 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-950/30 transition-colors duration-200 hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+          className="secondary-button inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
           disabled={disabled}
           onClick={onSearch}
           type="button"
@@ -500,13 +493,13 @@ function PanelHeader({
   icon: IconName;
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-white/10 px-4 py-4">
+    <div className="flex items-center justify-between border-b border-border px-4 py-4">
       <div className="min-w-0">
-        {eyebrow ? <p className="font-heading text-[10px] uppercase tracking-[0.2em] text-amber-200">{eyebrow}</p> : null}
-        <h2 className="mt-1 text-sm font-semibold text-white">{title}</h2>
-        <p className="mt-1 truncate text-xs text-slate-400">{subtitle}</p>
+        {eyebrow ? <p className="font-heading text-[10px] uppercase tracking-[0.12em] text-primary">{eyebrow}</p> : null}
+        <h2 className="mt-1 text-sm font-semibold text-foreground">{title}</h2>
+        <p className="mt-1 truncate text-xs text-slate-500">{subtitle}</p>
       </div>
-      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-amber-300/25 bg-amber-300/10 text-amber-200">
+      <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-teal-50 text-primary">
         <Icon name={icon} />
       </span>
     </div>
@@ -526,10 +519,10 @@ function SearchBox({
     <div className="flex gap-2">
       <label className="sr-only" htmlFor="chat-search">关键词</label>
       <div className="relative min-w-0 flex-1">
-        <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+        <Icon name="search" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
         <input
           id="chat-search"
-          className="h-10 w-full rounded-lg border border-white/15 bg-slate-950/60 pl-9 pr-3 text-sm text-slate-100 outline-none transition-colors duration-200 placeholder:text-slate-500 focus:border-primary focus:ring-2 focus:ring-primary/30"
+          className="field-control h-10 w-full rounded-lg pl-9 pr-3 text-sm transition-colors duration-200 placeholder:text-slate-400"
           placeholder="搜索会话或消息关键词"
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -539,7 +532,7 @@ function SearchBox({
         />
       </div>
       <button
-        className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/[0.06] text-slate-200 transition-colors duration-200 hover:border-primary hover:text-primary focus:outline-none focus:ring-2 focus:ring-primary"
+        className="secondary-button inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
         onClick={onSubmit}
         type="button"
         aria-label="执行搜索"
@@ -553,8 +546,8 @@ function SearchBox({
 function ChatRow({ chat, selected, onClick }: { chat: Chat; selected: boolean; onClick: () => void }) {
   return (
     <button
-      className={`grid w-full grid-cols-[1fr_auto] gap-3 border-b border-white/10 px-4 py-3 text-left transition-colors duration-200 hover:bg-white/[0.07] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary ${
-        selected ? "bg-amber-300/10 text-white" : "bg-transparent text-slate-200"
+      className={`grid w-full grid-cols-[1fr_auto] gap-3 border-b border-border px-4 py-3 text-left transition-colors duration-200 hover:bg-teal-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-primary ${
+        selected ? "bg-teal-50 text-foreground" : "bg-transparent text-slate-700"
       }`}
       onClick={onClick}
       type="button"
@@ -564,7 +557,7 @@ function ChatRow({ chat, selected, onClick }: { chat: Chat; selected: boolean; o
         <span className="mt-1 block truncate font-mono text-[11px] text-slate-500">{chat.username}</span>
       </span>
       <span className="text-right">
-        <span className="block font-mono text-sm font-semibold text-amber-200">{formatNumber(chat.message_count)}</span>
+        <span className="block font-mono text-sm font-semibold text-primary">{formatNumber(chat.message_count)}</span>
         <span className="mt-1 block text-[11px] text-slate-500">{formatTime(chat.latest_create_time)}</span>
       </span>
     </button>
@@ -593,7 +586,7 @@ function SummaryWorkspace({
   onSubmit: () => void;
 }) {
   return (
-    <section className="border-b border-white/10 bg-slate-950/30 px-4 py-4">
+    <section className="border-b border-border bg-panel-muted/50 px-4 py-4">
       <form
         className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between"
         onSubmit={(event) => {
@@ -603,12 +596,12 @@ function SummaryWorkspace({
       >
         <div className="min-w-0">
           <div className="flex items-center gap-3">
-            <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-violet-300/30 bg-violet-400/10 text-violet-200">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-white text-primary">
               <Icon name="sparkles" />
             </span>
             <div className="min-w-0">
-              <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.2em] text-violet-200">AI Signal Brief</p>
-              <h3 className="mt-1 truncate text-sm font-semibold text-white">为 {chatName} 生成消息摘要</h3>
+              <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.12em] text-primary">AI Signal Brief</p>
+              <h3 className="mt-1 truncate text-sm font-semibold text-foreground">为 {chatName} 生成消息摘要</h3>
             </div>
           </div>
         </div>
@@ -616,7 +609,7 @@ function SummaryWorkspace({
           <DateTimeField id="summary-start" label="开始时间" value={startValue} onChange={onStartChange} />
           <DateTimeField id="summary-end" label="结束时间" value={endValue} onChange={onEndChange} />
           <button
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-cta px-4 text-sm font-semibold text-white shadow-lg shadow-violet-950/35 transition-colors duration-200 hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-cta focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
+            className="primary-button inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-cta focus:ring-offset-2 focus:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50"
             disabled={disabled}
             type="submit"
           >
@@ -645,13 +638,13 @@ function DateTimeField({
 }) {
   return (
     <label className="block">
-      <span className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-400">
+      <span className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-600">
         <Icon name="clock" className="h-3.5 w-3.5" />
         {label}
       </span>
       <input
         id={id}
-        className="h-10 w-full rounded-lg border border-white/15 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition-colors duration-200 focus:border-primary focus:ring-2 focus:ring-primary/30"
+        className="field-control h-10 w-full rounded-lg px-3 text-sm transition-colors duration-200"
         type="datetime-local"
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -665,20 +658,20 @@ function SummaryPlaceholder({ status }: { status: SummaryState }) {
     return (
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         {[0, 1, 2].map((item) => (
-          <div key={item} className="h-24 animate-pulse rounded-lg border border-white/10 bg-white/[0.06]" />
+          <div key={item} className="h-24 animate-pulse rounded-lg border border-border bg-white" />
         ))}
       </div>
     );
   }
   if (status === "ready") {
     return (
-      <div className="mt-4 rounded-lg border border-emerald-300/25 bg-emerald-300/10 px-4 py-5 text-sm leading-6 text-emerald-100">
+      <div className="mt-4 rounded-lg border border-teal-200 bg-teal-50 px-4 py-5 text-sm leading-6 text-teal-800">
         摘要已生成，结果已发送到新打开的摘要报告页。
       </div>
     );
   }
   return (
-    <div className="mt-4 rounded-lg border border-dashed border-white/15 bg-white/[0.04] px-4 py-5 text-sm leading-6 text-slate-400">
+    <div className="mt-4 rounded-lg border border-dashed border-border bg-white px-4 py-5 text-sm leading-6 text-slate-600">
       选择时间窗口后生成摘要，结果会在独立报告页按重点、决策、待办、风险和关键原话展示。
     </div>
   );
@@ -686,7 +679,7 @@ function SummaryPlaceholder({ status }: { status: SummaryState }) {
 
 function SummaryError({ message }: { message: string }) {
   return (
-    <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300/35 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">
+    <div className="mt-3 flex items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm text-orange-900" role="alert">
       <Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />
       <span>{message}</span>
     </div>
@@ -713,14 +706,14 @@ function MessageThread({ messages }: { messages: Message[] }) {
 
   if (!orderedMessages.length) {
     return (
-      <div className="flex h-[620px] items-center justify-center bg-slate-950/65 px-4 text-center">
+      <div className="flex h-[620px] items-center justify-center bg-panel-muted/50 px-4 text-center">
         <EmptyState icon="message" title="消息终端待机" text="选择会话或输入关键词后查看聊天记录。" />
       </div>
     );
   }
 
   return (
-    <div className="scrollbar-subtle h-[620px] overflow-y-auto bg-slate-950/65 px-4 py-4 sm:px-6">
+    <div className="scrollbar-subtle h-[620px] overflow-y-auto bg-panel-muted/50 px-4 py-4 sm:px-6">
       <div className="mx-auto flex max-w-3xl flex-col gap-3">
         {orderedMessages.map((message, index) => {
           const previous = orderedMessages[index - 1];
@@ -741,7 +734,7 @@ function MessageThread({ messages }: { messages: Message[] }) {
 function TimeDivider({ value }: { value?: number }) {
   return (
     <div className="flex justify-center">
-      <span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 font-mono text-[11px] font-medium text-slate-400">
+      <span className="rounded-full border border-border bg-white px-3 py-1 font-mono text-[11px] font-medium text-slate-500">
         {formatMessageTime(value)}
       </span>
     </div>
@@ -764,11 +757,11 @@ function MessageBubble({ message }: { message: Message }) {
         <div
           className={
             isImage
-              ? "overflow-hidden rounded-xl border border-white/10 bg-white/[0.06] p-1 shadow-lg shadow-black/20"
-              : `rounded-xl px-3 py-2 text-sm leading-6 shadow-lg shadow-black/15 ${
+              ? "overflow-hidden rounded-xl border border-border bg-white p-1 shadow-sm"
+              : `rounded-xl px-3 py-2 text-sm leading-6 shadow-sm ${
                   self
-                    ? "bg-primary text-slate-950"
-                    : "border border-white/10 bg-white/[0.08] text-slate-100"
+                    ? "bg-primary text-white"
+                    : "border border-border bg-white text-slate-800"
                 }`
           }
           title={`${formatSender(message)} / ${message.local_type}`}
@@ -779,7 +772,7 @@ function MessageBubble({ message }: { message: Message }) {
             <p className="whitespace-pre-wrap break-words">{message.message_content ?? "内容为空"}</p>
           )}
         </div>
-        <div className="mt-1 flex items-center gap-2 px-1 font-mono text-[10px] text-slate-600">
+        <div className="mt-1 flex items-center gap-2 px-1 font-mono text-[10px] text-slate-500">
           <span>{formatTime(message.create_time)}</span>
           <span>{message.local_type}</span>
         </div>
@@ -797,7 +790,7 @@ function ImageMessage({ media }: { media: NonNullable<Message["media"]> }) {
   if (!media.available || !media.url) {
     return (
       <div
-        className="flex min-h-28 items-center justify-center rounded-lg bg-slate-900 px-4 text-center text-xs leading-5 text-slate-400"
+        className="flex min-h-28 items-center justify-center rounded-lg bg-teal-50 px-4 text-center text-xs leading-5 text-slate-600"
         style={style}
       >
         {media.requires_image_key ? "本地图片需要 image key" : "图片文件未找到"}
@@ -824,8 +817,8 @@ function Avatar({ name, self = false }: { name: string; self?: boolean }) {
     <span
       className={`mt-5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border text-xs font-semibold ${
         self
-          ? "border-amber-300/30 bg-amber-300/15 text-amber-100"
-          : "border-white/10 bg-white/[0.06] text-slate-200"
+          ? "border-teal-200 bg-teal-100 text-teal-800"
+          : "border-border bg-white text-slate-700"
       }`}
       title={name}
     >
@@ -844,7 +837,7 @@ function StatusPanel({ health }: { health: Health | null }) {
   ];
 
   return (
-    <section className="overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-xl shadow-black/15 backdrop-blur-xl">
+    <section className="surface-card overflow-hidden">
       <PanelHeader
         eyebrow="Security"
         title="API 状态"
@@ -855,9 +848,9 @@ function StatusPanel({ health }: { health: Health | null }) {
         {services.map((service) => {
           const ok = Boolean(health?.available[service.key]);
           return (
-            <div key={service.key} className="flex items-center justify-between rounded-lg border border-white/10 bg-slate-950/40 px-3 py-2">
-              <span className="text-sm text-slate-300">{service.label}</span>
-              <span className={`inline-flex items-center gap-1 text-xs font-semibold ${ok ? "text-emerald-200" : "text-rose-200"}`}>
+            <div key={service.key} className="flex items-center justify-between rounded-lg border border-border bg-white px-3 py-2">
+              <span className="text-sm text-slate-700">{service.label}</span>
+              <span className={`inline-flex items-center gap-1 text-xs font-semibold ${ok ? "text-teal-700" : "text-red-700"}`}>
                 <Icon name={ok ? "check" : "alert"} />
                 {ok ? "ready" : "offline"}
               </span>
@@ -871,16 +864,16 @@ function StatusPanel({ health }: { health: Health | null }) {
 
 function RecentSessions({ sessions }: { sessions: Session[] }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-xl shadow-black/15 backdrop-blur-xl">
+    <section className="surface-card overflow-hidden">
       <PanelHeader eyebrow="Momentum" title="最近会话" subtitle={`${sessions.length} 条样本`} icon="trendUp" />
       <div className="scrollbar-subtle max-h-80 overflow-auto">
         {sessions.slice(0, 8).map((session) => (
-          <div key={session.username} className="border-b border-white/10 px-4 py-3 last:border-b-0">
+          <div key={session.username} className="border-b border-border px-4 py-3 last:border-b-0">
             <div className="flex items-center justify-between gap-3">
-              <p className="truncate text-sm font-semibold text-white">{session.display_name}</p>
-              <span className="font-mono text-xs text-amber-200">{formatNumber(session.unread_count)}</span>
+              <p className="truncate text-sm font-semibold text-foreground">{session.display_name}</p>
+              <span className="font-mono text-xs text-primary">{formatNumber(session.unread_count)}</span>
             </div>
-            <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-400">{session.summary || "无摘要"}</p>
+            <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{session.summary || "无摘要"}</p>
           </div>
         ))}
         {!sessions.length ? <EmptyState icon="list" title="暂无会话样本" text="同步数据后显示最近会话。" /> : null}
@@ -891,12 +884,12 @@ function RecentSessions({ sessions }: { sessions: Session[] }) {
 
 function ContactsPanel({ contacts }: { contacts: Contact[] }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-white/15 bg-white/[0.06] shadow-xl shadow-black/15 backdrop-blur-xl">
+    <section className="surface-card overflow-hidden">
       <PanelHeader eyebrow="Network" title="联系人映射" subtitle={`${contacts.length} 个样本`} icon="users" />
       <div className="scrollbar-subtle max-h-80 overflow-auto">
         {contacts.slice(0, 10).map((contact) => (
-          <div key={contact.username} className="border-b border-white/10 px-4 py-3 last:border-b-0">
-            <p className="truncate text-sm font-semibold text-white">{contact.display_name}</p>
+          <div key={contact.username} className="border-b border-border px-4 py-3 last:border-b-0">
+            <p className="truncate text-sm font-semibold text-foreground">{contact.display_name}</p>
             <p className="mt-1 truncate font-mono text-[11px] text-slate-500">{contact.username}</p>
           </div>
         ))}
@@ -909,10 +902,10 @@ function ContactsPanel({ contacts }: { contacts: Contact[] }) {
 function EmptyState({ icon, title, text }: { icon: IconName; title: string; text: string }) {
   return (
     <div className="flex flex-col items-center justify-center px-4 py-8 text-center">
-      <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] text-slate-400">
+      <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50 text-primary">
         <Icon name={icon} />
       </span>
-      <p className="mt-3 text-sm font-semibold text-slate-200">{title}</p>
+      <p className="mt-3 text-sm font-semibold text-foreground">{title}</p>
       <p className="mt-1 text-xs leading-5 text-slate-500">{text}</p>
     </div>
   );
@@ -920,12 +913,12 @@ function EmptyState({ icon, title, text }: { icon: IconName; title: string; text
 
 function ErrorBanner({ message }: { message: string }) {
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-amber-300/35 bg-amber-300/10 px-4 py-3 text-amber-100 shadow-lg shadow-black/15 backdrop-blur-xl">
+    <div className="flex items-start gap-3 rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-orange-900 shadow-sm" role="alert">
       <Icon name="alert" className="mt-0.5 h-5 w-5 shrink-0" />
       <div className="min-w-0">
         <p className="text-sm font-semibold">本地 API 暂不可用</p>
         <p className="mt-1 text-sm leading-6">{message}</p>
-        <code className="scrollbar-subtle mt-2 block overflow-x-auto rounded-lg border border-white/10 bg-slate-950/75 px-3 py-2 font-mono text-xs text-slate-200">
+        <code className="scrollbar-subtle mt-2 block overflow-x-auto rounded-lg border border-orange-200 bg-white px-3 py-2 font-mono text-xs text-slate-700">
           wechat-agent serve --decrypted-dir .wechat-agent\work\20260510-000628\decrypted
         </code>
       </div>

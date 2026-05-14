@@ -53,27 +53,26 @@ function ReportHeader({
 }) {
   const included = response?.messages.included;
   return (
-    <header className="relative overflow-hidden rounded-xl border border-white/15 bg-black/40 px-4 py-5 shadow-2xl shadow-black/30 backdrop-blur-xl sm:px-5">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-300/80 to-transparent" />
+    <header className="surface-card px-4 py-5 sm:px-5">
       <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">
+          <span className="soft-pill inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.12em]">
             <Icon name="shield" className="h-3.5 w-3.5" />
             Secure Report
           </span>
-          <span className="inline-flex items-center gap-2 rounded-full border border-violet-300/30 bg-violet-400/10 px-3 py-1 text-xs font-semibold text-violet-200">
-            <span className={`h-2 w-2 rounded-full ${response ? "bg-emerald-300" : "bg-amber-300"}`} />
+          <span className="inline-flex items-center gap-2 rounded-full border border-teal-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+            <span className={`h-2 w-2 rounded-full ${response ? "bg-teal-500" : "bg-orange-400"}`} />
             {response ? "Ready" : "Generating"}
           </span>
         </div>
         <div>
-          <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.2em] text-violet-200">
+          <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.12em] text-primary">
             AI Summary Dispatch
           </p>
-          <h1 className="mt-2 font-heading text-2xl font-semibold text-white sm:text-3xl">
+          <h1 className="mt-2 font-heading text-2xl font-semibold text-foreground sm:text-3xl">
             {response?.summary.title || report?.chatName || "摘要结果页"}
           </h1>
-          <p className="mt-2 text-sm leading-6 text-slate-300">
+          <p className="mt-2 text-sm leading-6 text-slate-600">
             单列聚焦阅读视图，按重点、决策、行动、风险和原话逐章展开。
           </p>
         </div>
@@ -89,9 +88,9 @@ function ReportHeader({
 
 function HeaderMetric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-slate-950/55 px-3 py-3">
-      <p className="font-heading text-[10px] uppercase tracking-[0.16em] text-slate-500">{label}</p>
-      <p className="mt-1 truncate text-sm font-semibold text-slate-100">{value}</p>
+    <div className="surface-muted rounded-lg px-3 py-3">
+      <p className="font-heading text-[10px] uppercase tracking-[0.12em] text-slate-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-foreground">{value}</p>
     </div>
   );
 }
@@ -113,7 +112,7 @@ function SummaryNarrative({ response }: { response: SummaryResponse }) {
       <ProgressRail items={progress} />
 
       <Chapter tone="amber" eyebrow="Intro Hook" title="执行摘要" icon="fileText">
-        <p className="text-sm leading-7 text-slate-300">{summary.executive_summary}</p>
+        <p className="text-sm leading-7 text-slate-700">{summary.executive_summary}</p>
       </Chapter>
 
       <Chapter tone="sky" eyebrow="Chapter 1" title="核心重点" icon="target">
@@ -143,7 +142,7 @@ function SummaryNarrative({ response }: { response: SummaryResponse }) {
                   <Tag tone="amber">{item.priority || "未标注"}</Tag>
                   <span className="font-mono text-[11px] text-slate-500">{item.due_time || "未明确时间"}</span>
                 </div>
-                <p className="mt-2 text-sm font-semibold leading-6 text-white">{item.task}</p>
+                <p className="mt-2 text-sm font-semibold leading-6 text-foreground">{item.task}</p>
                 <p className="mt-1 text-xs text-slate-400">负责人：{item.owner || "未明确"}</p>
                 <p className="mt-2 text-xs leading-5 text-slate-400">{item.context}</p>
               </ReportCard>
@@ -176,13 +175,13 @@ function SummaryNarrative({ response }: { response: SummaryResponse }) {
       <Chapter tone="emerald" eyebrow="Climax" title="关键原话" icon="quote">
         <div className="space-y-3">
           {summary.notable_messages.length ? summary.notable_messages.map((item, index) => (
-            <blockquote key={`${item.quote}-${index}`} className="rounded-xl border border-white/12 bg-white/[0.05] p-4">
+            <blockquote key={`${item.quote}-${index}`} className="rounded-xl border border-border bg-white p-4">
               <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
-                <span className="font-semibold text-emerald-200">{item.sender}</span>
+                <span className="font-semibold text-primary">{item.sender}</span>
                 <span className="font-mono">{item.time}</span>
               </div>
-              <p className="mt-2 text-sm leading-7 text-white">&ldquo;{item.quote}&rdquo;</p>
-              <p className="mt-2 text-xs leading-5 text-slate-400">{item.reason}</p>
+              <p className="mt-2 text-sm leading-7 text-foreground">&ldquo;{item.quote}&rdquo;</p>
+              <p className="mt-2 text-xs leading-5 text-slate-500">{item.reason}</p>
             </blockquote>
           )) : <EmptyLine text="没有可引用的关键原话。" />}
         </div>
@@ -193,15 +192,15 @@ function SummaryNarrative({ response }: { response: SummaryResponse }) {
 
 function ProgressRail({ items }: { items: Array<{ label: string; active: boolean }> }) {
   return (
-    <nav className="rounded-xl border border-white/15 bg-black/35 p-2 backdrop-blur-xl" aria-label="摘要章节">
+    <nav className="surface-card p-2" aria-label="摘要章节">
       <div className="grid gap-2 sm:grid-cols-4">
         {items.map((item) => (
           <div
             key={item.label}
             className={`rounded-lg border px-3 py-2 text-center font-heading text-[10px] uppercase tracking-[0.16em] transition-colors duration-200 ${
               item.active
-                ? "border-amber-300/30 bg-amber-300/10 text-amber-200"
-                : "border-white/10 bg-white/[0.03] text-slate-500"
+                ? "border-teal-200 bg-teal-50 text-teal-800"
+                : "border-border bg-white text-slate-500"
             }`}
           >
             {item.label}
@@ -226,22 +225,22 @@ function Chapter({
   children: ReactNode;
 }) {
   const classes = {
-    amber: "border-amber-300/25 bg-amber-300/10 text-amber-200",
-    sky: "border-sky-300/25 bg-sky-300/10 text-sky-200",
-    violet: "border-violet-300/25 bg-violet-400/10 text-violet-200",
-    rose: "border-rose-300/25 bg-rose-300/10 text-rose-200",
-    emerald: "border-emerald-300/25 bg-emerald-300/10 text-emerald-200",
+    amber: "bg-teal-50 text-primary",
+    sky: "bg-teal-50 text-primary",
+    violet: "bg-teal-50 text-primary",
+    rose: "bg-red-50 text-red-700",
+    emerald: "bg-teal-50 text-primary",
   };
 
   return (
-    <section className="rounded-xl border border-white/15 bg-black/35 p-4 shadow-xl shadow-black/20 backdrop-blur-xl sm:p-5">
+    <section className="surface-card p-4 sm:p-5">
       <div className="mb-4 flex items-start gap-3">
-        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border ${classes[tone]}`}>
+        <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${classes[tone]}`}>
           <Icon name={icon} />
         </span>
         <div className="min-w-0">
-          <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">{eyebrow}</p>
-          <h2 className="mt-1 text-lg font-semibold text-white">{title}</h2>
+          <p className="font-heading text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{eyebrow}</p>
+          <h2 className="mt-1 text-lg font-semibold text-foreground">{title}</h2>
         </div>
       </div>
       {children}
@@ -262,10 +261,10 @@ function ItemList({
       {items.map((item, index) => (
         <ReportCard key={`${item.title}-${index}`}>
           <div className="flex items-start justify-between gap-3">
-            <p className="text-sm font-semibold leading-6 text-white">{item.title}</p>
+            <p className="text-sm font-semibold leading-6 text-foreground">{item.title}</p>
             {item.tag ? <Tag tone={item.tone ?? "sky"}>{item.tag}</Tag> : null}
           </div>
-          <p className="mt-2 text-xs leading-5 text-slate-400">{item.body}</p>
+          <p className="mt-2 text-xs leading-5 text-slate-500">{item.body}</p>
         </ReportCard>
       ))}
     </div>
@@ -274,7 +273,7 @@ function ItemList({
 
 function ReportCard({ children }: { children: ReactNode }) {
   return (
-    <div className="rounded-xl border border-white/12 bg-white/[0.05] p-4 transition-colors duration-200 hover:border-amber-300/30">
+    <div className="rounded-xl border border-border bg-white p-4 transition-colors duration-200 hover:border-teal-300">
       {children}
     </div>
   );
@@ -282,9 +281,9 @@ function ReportCard({ children }: { children: ReactNode }) {
 
 function Tag({ tone, children }: { tone: "amber" | "sky" | "rose"; children: ReactNode }) {
   const classes = {
-    amber: "border-amber-300/25 bg-amber-300/10 text-amber-200",
-    sky: "border-sky-300/25 bg-sky-300/10 text-sky-200",
-    rose: "border-rose-300/25 bg-rose-300/10 text-rose-200",
+    amber: "border-orange-200 bg-orange-50 text-orange-800",
+    sky: "border-teal-200 bg-teal-50 text-teal-800",
+    rose: "border-red-200 bg-red-50 text-red-700",
   };
   return (
     <span className={`inline-flex shrink-0 items-center rounded-md border px-2 py-1 text-[11px] font-semibold ${classes[tone]}`}>
@@ -295,7 +294,7 @@ function Tag({ tone, children }: { tone: "amber" | "sky" | "rose"; children: Rea
 
 function EmptyLine({ text }: { text: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-white/15 bg-white/[0.03] px-4 py-3 text-sm text-slate-500">
+    <div className="rounded-xl border border-dashed border-border bg-white px-4 py-3 text-sm text-slate-500">
       {text}
     </div>
   );
@@ -303,21 +302,21 @@ function EmptyLine({ text }: { text: string }) {
 
 function ReportLoading({ report }: { report: StoredSummaryReport | null }) {
   return (
-    <section className="rounded-xl border border-white/15 bg-black/35 p-5 shadow-xl shadow-black/20 backdrop-blur-xl">
+    <section className="surface-card p-5">
       <div className="flex items-center gap-3">
-        <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-amber-300/25 bg-amber-300/10 text-amber-200">
+        <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-teal-50 text-primary">
           <Icon name="activity" className="h-4 w-4 animate-spin" />
         </span>
         <div>
-          <h2 className="text-base font-semibold text-white">正在生成摘要</h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <h2 className="text-base font-semibold text-foreground">正在生成摘要</h2>
+          <p className="mt-1 text-sm text-slate-500">
             {report?.chatName ? `会话：${report.chatName}` : "等待 dashboard 写入摘要结果。"}
           </p>
         </div>
       </div>
       <div className="mt-5 grid gap-3">
         {[0, 1, 2].map((item) => (
-          <div key={item} className="h-24 animate-pulse rounded-xl border border-white/10 bg-white/[0.05]" />
+          <div key={item} className="h-24 animate-pulse rounded-xl border border-border bg-white" />
         ))}
       </div>
     </section>
@@ -326,24 +325,24 @@ function ReportLoading({ report }: { report: StoredSummaryReport | null }) {
 
 function ReportEmpty({ icon, title, text }: { icon: IconName; title: string; text: string }) {
   return (
-    <section className="rounded-xl border border-white/15 bg-black/35 p-5 text-center shadow-xl shadow-black/20 backdrop-blur-xl">
-      <span className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-xl border border-amber-300/25 bg-amber-300/10 text-amber-200">
+    <section className="surface-card p-5 text-center">
+      <span className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-xl bg-teal-50 text-primary">
         <Icon name={icon} />
       </span>
-      <h2 className="mt-4 text-base font-semibold text-white">{title}</h2>
-      <p className="mt-2 text-sm leading-6 text-slate-400">{text}</p>
+      <h2 className="mt-4 text-base font-semibold text-foreground">{title}</h2>
+      <p className="mt-2 text-sm leading-6 text-slate-500">{text}</p>
     </section>
   );
 }
 
 function FinalActions() {
   return (
-    <footer className="flex flex-col gap-2 rounded-xl border border-white/15 bg-black/35 p-4 backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between">
+    <footer className="surface-card flex flex-col gap-2 p-4 sm:flex-row sm:items-center sm:justify-between">
       <p className="text-xs leading-5 text-slate-500">
         结果保存在当前浏览器的本地存储中，重新生成会覆盖最新摘要入口。
       </p>
       <Link
-        className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-cta px-4 text-sm font-semibold text-white transition-colors duration-200 hover:bg-violet-500 focus:outline-none focus:ring-2 focus:ring-cta focus:ring-offset-2 focus:ring-offset-background"
+        className="primary-button inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-cta focus:ring-offset-2 focus:ring-offset-background"
         href="/"
       >
         <Icon name="arrowRight" />
